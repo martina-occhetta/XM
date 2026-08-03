@@ -1,0 +1,141 @@
+{
+  "config": {
+    "updates": 4000,
+    "seeds": [
+      0,
+      1,
+      2
+    ],
+    "ks": [
+      1,
+      4,
+      8
+    ],
+    "n_steps": 2,
+    "plot": false
+  },
+  "results": {
+    "K=1": {
+      "energy_distance_mean": 0.20144367218017578,
+      "energy_distance_std": 0.0063410679300852655,
+      "gap_occupancy_mean": 0.2593958340585232,
+      "gap_occupancy_std": 0.014829966731948262,
+      "mode_recall_mean": 0.38958332998057205,
+      "mode_recall_std": 0.003087414431381909,
+      "true_data_gap_occupancy_mean": 0.0,
+      "true_data_gap_occupancy_std": 0.0
+    },
+    "K=4": {
+      "energy_distance_mean": 0.048198506236076355,
+      "energy_distance_std": 0.005401156624008947,
+      "gap_occupancy_mean": 0.025416666641831398,
+      "gap_occupancy_std": 0.0040331741533086865,
+      "mode_recall_mean": 0.4705208328862985,
+      "mode_recall_std": 0.005752113425616997,
+      "true_data_gap_occupancy_mean": 0.0,
+      "true_data_gap_occupancy_std": 0.0
+    },
+    "K=8": {
+      "energy_distance_mean": 0.041141738494237266,
+      "energy_distance_std": 0.00525230450677922,
+      "gap_occupancy_mean": 0.02012500000031044,
+      "gap_occupancy_std": 0.001547006633590225,
+      "mode_recall_mean": 0.4651666693389416,
+      "mode_recall_std": 0.007241072689317104,
+      "true_data_gap_occupancy_mean": 0.0,
+      "true_data_gap_occupancy_std": 0.0
+    },
+    "K=1_x8updates": {
+      "energy_distance_mean": 0.1932001312573751,
+      "energy_distance_std": 0.004001507819811633,
+      "gap_occupancy_mean": 0.2814999967813492,
+      "gap_occupancy_std": 0.01289056417585739,
+      "mode_recall_mean": 0.38593749701976776,
+      "mode_recall_std": 0.009320253466434253,
+      "true_data_gap_occupancy_mean": 0.0,
+      "true_data_gap_occupancy_std": 0.0
+    }
+  },
+  "per_seed": {
+    "K=1": [
+      {
+        "energy_distance": 0.20911557972431183,
+        "gap_occupancy": 0.27868749760091305,
+        "mode_recall": 0.387124989181757,
+        "true_data_gap_occupancy": 0.0
+      },
+      {
+        "energy_distance": 0.19358651340007782,
+        "gap_occupancy": 0.25687500461935997,
+        "mode_recall": 0.39393749833106995,
+        "true_data_gap_occupancy": 0.0
+      },
+      {
+        "energy_distance": 0.2016289234161377,
+        "gap_occupancy": 0.24262499995529652,
+        "mode_recall": 0.3876875024288893,
+        "true_data_gap_occupancy": 0.0
+      }
+    ],
+    "K=4": [
+      {
+        "energy_distance": 0.04281412065029144,
+        "gap_occupancy": 0.02056249976158142,
+        "mode_recall": 0.4714374914765358,
+        "true_data_gap_occupancy": 0.0
+      },
+      {
+        "energy_distance": 0.046198680996894836,
+        "gap_occupancy": 0.02525000018067658,
+        "mode_recall": 0.47706250473856926,
+        "true_data_gap_occupancy": 0.0
+      },
+      {
+        "energy_distance": 0.055582717061042786,
+        "gap_occupancy": 0.030437499983236194,
+        "mode_recall": 0.46306250244379044,
+        "true_data_gap_occupancy": 0.0
+      }
+    ],
+    "K=8": [
+      {
+        "energy_distance": 0.04225492477416992,
+        "gap_occupancy": 0.018999999971129,
+        "mode_recall": 0.45500000566244125,
+        "true_data_gap_occupancy": 0.0
+      },
+      {
+        "energy_distance": 0.046945229172706604,
+        "gap_occupancy": 0.022312500164844096,
+        "mode_recall": 0.46918749809265137,
+        "true_data_gap_occupancy": 0.0
+      },
+      {
+        "energy_distance": 0.034225061535835266,
+        "gap_occupancy": 0.019062499864958227,
+        "mode_recall": 0.4713125042617321,
+        "true_data_gap_occupancy": 0.0
+      }
+    ],
+    "K=1_x8updates": [
+      {
+        "energy_distance": 0.19884513318538666,
+        "gap_occupancy": 0.2929999940097332,
+        "mode_recall": 0.3732500020414591,
+        "true_data_gap_occupancy": 0.0
+      },
+      {
+        "energy_distance": 0.19072195887565613,
+        "gap_occupancy": 0.26349999755620956,
+        "mode_recall": 0.39537499472498894,
+        "true_data_gap_occupancy": 0.0
+      },
+      {
+        "energy_distance": 0.19003330171108246,
+        "gap_occupancy": 0.2879999987781048,
+        "mode_recall": 0.38918749429285526,
+        "true_data_gap_occupancy": 0.0
+      }
+    ]
+  }
+}
