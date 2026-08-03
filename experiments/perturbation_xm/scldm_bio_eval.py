@@ -1,42 +1,45 @@
 """
 End-to-end integration: Explorative Modeling (best-of-K exploration) applied to
 an scLDM-shaped conditional generative model, scored on *biological* signal with
-the user's `bio-perturbations` evaluator (DEG recovery, distribution fit,
-PCC-Δ), against that framework's own Identity / MeanShift baselines.
+the `bio-perturbations` evaluator (DEG recovery, E-distance, PCC-Δ), against that
+framework's own Identity / MeanShift baselines.
 
-What this demonstrates
-----------------------
-1. The XM engine (`xm_core.xm_chunked_best_of_k`, a verbatim copy of the repo's
-   real function) plugs into a perturbation-response generative model with no
-   changes -- exactly as it would wrap scLDM's flow/diffusion loss.
-2. The model's samples pass cleanly through the bio-perturbations prediction I/O
-   contract and biological evaluator.
-3. Whether exploration improves *biological* metrics -- specifically the
-   distribution-level fidelity (response heterogeneity) that mean-based
-   benchmarks miss and that bio-perturbations is built to measure.
+This harness has two axes, both selectable from the CLI:
 
-"mini-scLDM" vs real scLDM
---------------------------
-This uses a conditional flow-matching velocity net over (standardised log1p)
-expression as a compact stand-in for scLDM's latent diffusion. A real scLDM run
-is the same code with (a) a trained VAE latent instead of log1p expression and
-(b) scLDM's own network -- the XM wrapper and the bio evaluation are unchanged.
+  --dataset  synthetic | norman_2019 | replogle_2022_k562 | adamson_2016 | ...
+             `synthetic` = a self-contained Perturb-seq generator (default, always
+             runnable). Any other id is loaded through `bio_perturbations.datasets`
+             (pertpy) -- real Perturb-seq. See "Running on real data" below.
 
-Data
-----
-Real Perturb-seq loaders (Norman/Replogle/Adamson via pertpy) live in
-`bio_perturbations.datasets`; their download hosts are egress-blocked in this
-sandbox, so this script generates a *realistic synthetic Perturb-seq* instead:
-raw Poisson counts, several gene-KO perturbations, each with a HETEROGENEOUS
-responder / non-responder split (incomplete penetrance) that creates genuine
-DEGs *and* the multimodal response that makes mode averaging bite. To run on a
-real dataset where egress is open, replace `make_perturbseq()` with:
+  --space    logexpr | vae
+             `logexpr` = flow runs in standardised log1p expression space (default).
+             `vae`     = a small scLDM-style VAE is trained first and the flow runs
+             in its LATENT space (encode -> flow+XM in latent -> decode). This is a
+             truer scLDM: a conditional latent generative model over a learned VAE
+             code. Swap the Gaussian-on-log1p VAE here for scVI's NB VAE and it is
+             scLDM proper; the XM wrapper and evaluation are unchanged either way.
 
-    from bio_perturbations.datasets import load_norman_2019, simulation_split, apply_split
-    adata = load_norman_2019(); adata, _ = simulation_split(adata); parts = apply_split(adata)
-    train_reference, truth = parts["train"], parts["test"]
+The exploration engine is the repo's real `xm_chunked_best_of_k` (vendored verbatim
+in xm_core.py). Baseline = `--ks 1`; XM = `--ks 4` (etc). Everything is CPU-friendly.
 
-Everything downstream (model, XM wrapper, evaluator call) is identical.
+Running on real data
+--------------------
+Real Perturb-seq loaders live in `bio_perturbations.datasets` (pertpy, gated behind
+the `[datasets]` extra). Their download hosts (figshare, cellxgene) are commonly
+egress-blocked; when a load fails this script prints why and (unless --strict-dataset)
+falls back to the synthetic generator with a loud banner, so a first run never hard-
+crashes. In an egress-open environment:
+
+    pip install -e /path/to/bio-perturbations".[prep,datasets]"
+    python scldm_bio_eval.py --dataset norman_2019 --space vae \\
+        --n-hvg 2000 --max-perts 20 --max-cells-per-cond 400 --ks 1 4
+
+The task is *distribution recovery on seen perturbations* (does the model reproduce
+the held-out perturbed cell population, heterogeneity included) -- the mode-averaging
+question. We therefore hold out CELLS within each perturbation (not whole
+perturbations); the model conditions on a learned per-perturbation embedding.
+Unseen-perturbation generalisation is a different task needing perturbation features
+(see bio_perturbations `LinearBaseline`) and is out of scope here.
 """
 
 from __future__ import annotations
@@ -44,6 +47,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 
 import numpy as np
 import pandas as pd
@@ -60,56 +64,46 @@ DEVICE = "cpu"
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
-# ---------------------------------------------------------------------------
-# Realistic synthetic Perturb-seq (raw counts, heterogeneous responses)
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# Data
+# ===========================================================================
 def make_perturbseq(seed, n_genes=50, n_perts=5, cells_per_cond_per_sample=150,
                     n_samples=2, program_size=8, responder_frac=0.5):
-    """
-    Returns a contract-compliant AnnData of raw counts with:
-      obs["condition"] (perturbation label, "control" for controls),
-      obs["sample_id"] (biological replicate, for pseudobulk DESeq2),
-      obs["target_genes"] (knocked-down gene per perturbation),
-      layers["counts"] (raw ints), var_names = gene symbols.
+    """Realistic synthetic Perturb-seq (raw counts, heterogeneous responses).
 
     Each perturbation knocks down a target gene AND drives a DE program in a
-    RESPONDER subpopulation (fraction `responder_frac`) while non-responders
-    shift only weakly -> a bimodal, heterogeneous response with real DEGs.
+    RESPONDER subpopulation while non-responders shift only weakly -> a bimodal,
+    heterogeneous response with genuine downstream DEGs. Contract-compliant:
+    obs[condition/sample_id/target_genes], layers["counts"], var_names.
     """
     rng = np.random.default_rng(seed)
     genes = [f"g{i:02d}" for i in range(n_genes)]
-    base = rng.gamma(shape=2.0, scale=6.0, size=n_genes) + 2.0  # per-gene base mean counts
+    base = rng.gamma(shape=2.0, scale=6.0, size=n_genes) + 2.0
 
-    # Fixed perturbation biology (shared across seeds so train/truth agree)
-    bio = np.random.default_rng(0)
+    bio = np.random.default_rng(0)  # fixed biology so train/truth agree across seeds
     targets = [int(t) for t in bio.choice(n_genes, size=n_perts, replace=False)]
     programs, prog_lfc, weak_scale = [], [], []
     for p in range(n_perts):
-        prog = bio.choice(n_genes, size=program_size, replace=False)
-        lfc = bio.choice([-1.0, 1.0], size=program_size) * bio.uniform(0.8, 1.8, size=program_size)
-        programs.append(prog)
-        prog_lfc.append(lfc)
-        weak_scale.append(0.15)  # non-responders show 15% of the responder shift
+        programs.append(bio.choice(n_genes, size=program_size, replace=False))
+        prog_lfc.append(bio.choice([-1.0, 1.0], size=program_size) * bio.uniform(0.8, 1.8, size=program_size))
+        weak_scale.append(0.15)
 
     rows, counts = [], []
     conditions = ["control"] + [f"KO_{genes[targets[p]]}" for p in range(n_perts)]
     for s in range(n_samples):
         sample_id = f"s{s+1}"
-        batch = rng.normal(1.0, 0.04)  # mild per-replicate scaling
+        batch = rng.normal(1.0, 0.04)
         for ci, cond in enumerate(conditions):
-            n = cells_per_cond_per_sample
-            for _ in range(n):
+            for _ in range(cells_per_cond_per_sample):
                 mean = base.copy()
                 tgt = ""
                 if ci > 0:
                     p = ci - 1
                     tgt = genes[targets[p]]
-                    mean[targets[p]] *= 0.2  # on-target knockdown
-                    responder = rng.random() < responder_frac
-                    scale = 1.0 if responder else weak_scale[p]
+                    mean[targets[p]] *= 0.2
+                    scale = 1.0 if rng.random() < responder_frac else weak_scale[p]
                     mean[programs[p]] *= np.exp2(prog_lfc[p] * scale)
-                lam = np.clip(mean * batch, 0.05, None)
-                counts.append(rng.poisson(lam))
+                counts.append(rng.poisson(np.clip(mean * batch, 0.05, None)))
                 rows.append({"condition": cond, "sample_id": sample_id, "target_genes": tgt})
 
     obs = pd.DataFrame(rows, index=[f"cell_{i}" for i in range(len(rows))])
@@ -121,9 +115,238 @@ def make_perturbseq(seed, n_genes=50, n_perts=5, cells_per_cond_per_sample=150,
     return adata
 
 
-# ---------------------------------------------------------------------------
-# mini-scLDM: conditional flow-matching velocity net (log1p expression space)
-# ---------------------------------------------------------------------------
+def _dense(X):
+    return np.asarray(X.todense() if hasattr(X, "todense") else X, dtype=float)
+
+
+def _assign_pseudoreplicates(adata, n_reps, seed):
+    """Ensure >=n_reps biological-replicate labels per condition for DESeq2.
+
+    Real Perturb-seq often lacks replicates; DESeq2 pseudobulk needs >=2 samples
+    per condition. We partition each condition's cells into `n_reps` random groups.
+    NOTE: pseudo-replicates underestimate true biological variance -- fine for a
+    demo / relative model comparison, not for absolute significance claims.
+    """
+    rng = np.random.default_rng(seed)
+    sample_id = np.empty(adata.n_obs, dtype=object)
+    cond = adata.obs["condition"].to_numpy()
+    for c in pd.unique(cond):
+        idx = np.flatnonzero(cond == c)
+        rng.shuffle(idx)
+        for j, cell in enumerate(idx):
+            sample_id[cell] = f"rep{j % n_reps + 1}"
+    adata.obs["sample_id"] = sample_id
+    return adata
+
+
+def cell_level_holdout(adata, test_fraction, seed):
+    """Split CELLS within each condition into (train_reference, truth).
+
+    Keeps the full perturbation vocabulary in both splits -- the distribution-
+    recovery setup the flow model (learned per-pert embedding) is built for.
+    """
+    rng = np.random.default_rng(seed)
+    cond = adata.obs["condition"].to_numpy()
+    train_mask = np.zeros(adata.n_obs, dtype=bool)
+    for c in pd.unique(cond):
+        idx = np.flatnonzero(cond == c)
+        rng.shuffle(idx)
+        n_test = max(1, int(round(len(idx) * test_fraction)))
+        train_mask[idx[n_test:]] = True
+    train = adata[train_mask].copy()
+    truth = adata[~train_mask].copy()
+    return train, truth
+
+
+def _subset_for_tractability(adata, n_hvg, max_perts, max_cells_per_cond, seed):
+    """Optionally shrink a large real dataset so it trains on CPU in minutes.
+
+    - keep control + the `max_perts` perturbations with the most cells
+    - keep the top `n_hvg` high-variance genes UNION the selected perts' targets
+    - subsample each condition to `max_cells_per_cond` cells
+    """
+    rng = np.random.default_rng(seed)
+    cond = adata.obs["condition"].astype(str)
+
+    # perturbation selection
+    counts_per = cond[cond != "control"].value_counts()
+    keep_perts = list(counts_per.index[:max_perts]) if max_perts else list(counts_per.index)
+    keep_conds = ["control"] + keep_perts
+    adata = adata[cond.isin(keep_conds)].copy()
+
+    # gene selection (HVG on log1p) unioned with on-target genes
+    if n_hvg and n_hvg < adata.n_vars:
+        Y = np.log1p(_dense(adata.layers.get("counts", adata.X)))
+        hvg = np.argsort(Y.var(axis=0))[::-1][:n_hvg]
+        targets = set()
+        for t in adata.obs["target_genes"].astype(str):
+            targets.update(x for x in t.replace("+", " ").split() if x)
+        target_idx = [i for i, g in enumerate(adata.var_names) if g in targets]
+        keep_genes = np.union1d(hvg, np.asarray(target_idx, dtype=int)) if target_idx else hvg
+        adata = adata[:, np.sort(keep_genes)].copy()
+
+    # per-condition cell cap
+    if max_cells_per_cond:
+        cond = adata.obs["condition"].to_numpy()
+        keep = []
+        for c in pd.unique(cond):
+            idx = np.flatnonzero(cond == c)
+            if len(idx) > max_cells_per_cond:
+                idx = rng.choice(idx, size=max_cells_per_cond, replace=False)
+            keep.append(idx)
+        keep = np.sort(np.concatenate(keep))
+        adata = adata[keep].copy()
+    return adata
+
+
+def load_real_dataset(name, *, n_hvg, max_perts, max_cells_per_cond,
+                      n_pseudoreplicates, test_fraction, cache_dir, seed):
+    """Load a real pertpy dataset via bio_perturbations and prepare 4-state eval.
+
+    Returns (train_reference, truth), both contract-ready with pseudo-replicate
+    sample_id for DESeq2. Raises on any load failure (caller decides fallback).
+    """
+    from bio_perturbations.datasets import load_dataset
+    adata = load_dataset(name, cache_dir=cache_dir, require_raw_counts=True)
+    # ensure a raw-count layer for DESeq2 (loader sets it, but be defensive)
+    if "counts" not in adata.layers:
+        adata.layers["counts"] = _dense(adata.X)
+    adata = _subset_for_tractability(adata, n_hvg, max_perts, max_cells_per_cond, seed)
+    adata.var["include_for_evaluation"] = True
+    train, truth = cell_level_holdout(adata, test_fraction=test_fraction, seed=seed)
+    _assign_pseudoreplicates(train, n_pseudoreplicates, seed=seed)
+    _assign_pseudoreplicates(truth, n_pseudoreplicates, seed=seed + 1)
+    return train, truth
+
+
+def get_data(args):
+    """Dispatch to synthetic or real data; returns (train_ref, truth, source_note)."""
+    if args.dataset == "synthetic":
+        return make_perturbseq(seed=0), make_perturbseq(seed=1), "synthetic Perturb-seq"
+    try:
+        train, truth = load_real_dataset(
+            args.dataset, n_hvg=args.n_hvg, max_perts=args.max_perts,
+            max_cells_per_cond=args.max_cells_per_cond,
+            n_pseudoreplicates=args.n_pseudoreplicates,
+            test_fraction=args.test_fraction, cache_dir=args.cache_dir, seed=0)
+        return train, truth, f"real dataset '{args.dataset}' (bio_perturbations/pertpy)"
+    except Exception as e:  # noqa: BLE001 - want any failure (network/import/etc)
+        msg = f"{type(e).__name__}: {e}"
+        if args.strict_dataset:
+            print(f"ERROR: failed to load real dataset '{args.dataset}': {msg}", file=sys.stderr)
+            raise
+        print("\n" + "!" * 78)
+        print(f"WARNING: could not load real dataset '{args.dataset}':\n  {msg}")
+        print("Falling back to SYNTHETIC Perturb-seq. To run on real data, use an")
+        print("egress-open environment with `[datasets]` installed, or pass --strict-dataset.")
+        print("!" * 78 + "\n")
+        return make_perturbseq(seed=0), make_perturbseq(seed=1), \
+            f"synthetic (fallback; '{args.dataset}' unavailable: {type(e).__name__})"
+
+
+# ===========================================================================
+# Representation spaces: logexpr (identity-ish) and VAE latent (scLDM-style)
+# ===========================================================================
+class LogExprSpace:
+    """Standardised log1p expression. Flow runs directly in gene space."""
+
+    name = "logexpr"
+
+    def fit(self, train_counts):
+        Y = np.log1p(np.asarray(train_counts, dtype=float))
+        self.mu, self.sd = Y.mean(0), Y.std(0) + 1e-6
+        self.dim = Y.shape[1]
+        return self
+
+    def encode(self, counts):
+        return (np.log1p(np.asarray(counts, dtype=float)) - self.mu) / self.sd
+
+    def decode(self, Z):
+        return np.clip(np.expm1(Z * self.sd + self.mu), 0.0, None)
+
+
+class VAE(nn.Module):
+    """Small Gaussian VAE over standardised log1p expression (scLDM stand-in)."""
+
+    def __init__(self, n_genes, latent_dim, hidden=256):
+        super().__init__()
+        self.enc = nn.Sequential(nn.Linear(n_genes, hidden), nn.SiLU(),
+                                 nn.Linear(hidden, hidden), nn.SiLU())
+        self.fc_mu = nn.Linear(hidden, latent_dim)
+        self.fc_logvar = nn.Linear(hidden, latent_dim)
+        self.dec = nn.Sequential(nn.Linear(latent_dim, hidden), nn.SiLU(),
+                                 nn.Linear(hidden, hidden), nn.SiLU(),
+                                 nn.Linear(hidden, n_genes))
+
+    def encode(self, x):
+        h = self.enc(x)
+        return self.fc_mu(h), self.fc_logvar(h)
+
+    def decode(self, z):
+        return self.dec(z)
+
+    def forward(self, x):
+        mu, logvar = self.encode(x)
+        z = mu + torch.randn_like(mu) * torch.exp(0.5 * logvar)
+        return self.decode(z), mu, logvar
+
+
+class VAESpace:
+    """Train a VAE on train cells; flow then runs in the VAE latent (encoder mean)."""
+
+    name = "vae"
+
+    def __init__(self, latent_dim=16, epochs=60, beta=1e-3, lr=1e-3, batch=256, seed=0):
+        self.latent_dim, self.epochs, self.beta = latent_dim, epochs, beta
+        self.lr, self.batch, self.seed = lr, batch, seed
+
+    def fit(self, train_counts):
+        torch.manual_seed(self.seed)
+        Y = np.log1p(np.asarray(train_counts, dtype=float))
+        self.mu, self.sd = Y.mean(0), Y.std(0) + 1e-6
+        Ystd = torch.tensor((Y - self.mu) / self.sd, dtype=torch.float32, device=DEVICE)
+        n_genes = Ystd.shape[1]
+        self.vae = VAE(n_genes, self.latent_dim).to(DEVICE)
+        opt = torch.optim.Adam(self.vae.parameters(), lr=self.lr)
+        N = Ystd.shape[0]
+        self.vae.train()
+        steps = max(1, N // self.batch)
+        for _ in range(self.epochs):
+            perm = torch.randperm(N, device=DEVICE)
+            for b in range(steps):
+                xb = Ystd[perm[b * self.batch:(b + 1) * self.batch]]
+                xhat, mu, logvar = self.vae(xb)
+                recon = (xhat - xb).pow(2).mean()
+                kl = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp()).mean()
+                loss = recon + self.beta * kl
+                opt.zero_grad(); loss.backward(); opt.step()
+        self.vae.eval()
+        self.dim = self.latent_dim
+        return self
+
+    @torch.no_grad()
+    def encode(self, counts):
+        Y = (np.log1p(np.asarray(counts, dtype=float)) - self.mu) / self.sd
+        mu, _ = self.vae.encode(torch.tensor(Y, dtype=torch.float32, device=DEVICE))
+        return mu.cpu().numpy()
+
+    @torch.no_grad()
+    def decode(self, Z):
+        Yhat = self.vae.decode(torch.tensor(Z, dtype=torch.float32, device=DEVICE)).cpu().numpy()
+        return np.clip(np.expm1(Yhat * self.sd + self.mu), 0.0, None)
+
+
+def build_space(name, latent_dim, vae_epochs, seed):
+    if name == "logexpr":
+        return LogExprSpace()
+    if name == "vae":
+        return VAESpace(latent_dim=latent_dim, epochs=vae_epochs, seed=seed)
+    raise ValueError(f"unknown space {name!r}")
+
+
+# ===========================================================================
+# Conditional flow (mini-scLDM) + XM exploration
+# ===========================================================================
 class CondVelocity(nn.Module):
     def __init__(self, dim, n_conditions, embed=32, hidden=256):
         super().__init__()
@@ -132,8 +355,7 @@ class CondVelocity(nn.Module):
             nn.Linear(dim + 1 + embed, hidden), nn.SiLU(),
             nn.Linear(hidden, hidden), nn.SiLU(),
             nn.Linear(hidden, hidden), nn.SiLU(),
-            nn.Linear(hidden, dim),
-        )
+            nn.Linear(hidden, dim))
 
     def forward(self, x_t, t, cond):
         if t.ndim == 1:
@@ -188,40 +410,31 @@ def sample_flow(model, cond_id, n, dim, n_steps=10):
     return x.cpu().numpy()
 
 
-# ---------------------------------------------------------------------------
-# Build a prediction AnnData from a trained flow model
-# ---------------------------------------------------------------------------
-def flow_predictions(model, conditions, control_label, genes, mu, sd, n_gen, n_steps):
-    """Generate cells per condition, invert standardisation -> non-negative
-    count-scale expression, and assemble a contract-compliant prediction."""
-    dim = len(genes)
+# ===========================================================================
+# Predict + evaluate
+# ===========================================================================
+def flow_predictions(model, space, conditions, control_label, genes, n_gen, n_steps):
     cond_to_id = {c: i for i, c in enumerate(conditions)}
 
-    def gen(cond_label):
-        z = sample_flow(model, cond_to_id[cond_label], n_gen, dim, n_steps=n_steps)
-        expr = np.expm1(z * sd + mu)          # invert standardised log1p
-        return np.clip(expr, 0.0, None)
+    def gen(c):
+        Z = sample_flow(model, cond_to_id[c], n_gen, space.dim, n_steps=n_steps)
+        return space.decode(Z)  # -> non-negative count-scale expression
 
     matrices = {c: gen(c) for c in conditions if c != control_label}
     control = gen(control_label)
     return make_prediction_anndata(matrices, genes, control=control)
 
 
-def baseline_predictions(model_obj, train_ref, perts, control_label, genes, n_gen):
-    """Predict with a bio-perturbations baseline and wrap as prediction AnnData."""
-    fitted = model_obj.fit(train_ref)
-    pred = fitted.predict(list(perts))
-    # baselines emit a contract AnnData; clip to non-negative (count expression
-    # can't be negative, and mean_shift can push knocked-down genes below zero).
-    # The evaluator refuses to clip silently, so we do it explicitly here.
+def baseline_predictions(model_obj, train_ref, perts):
+    pred = model_obj.fit(train_ref).predict(list(perts))
+    # count expression can't be negative; evaluator refuses to clip silently.
     pred.X = np.clip(np.asarray(pred.X, dtype=float), 0.0, None)
     return pred
 
 
-# ---------------------------------------------------------------------------
 def summarise(report):
-    """Mean over perturbations of the headline biological metrics."""
     rows = report["per_perturbation"]
+
     def col(getter):
         vals = [getter(r) for r in rows]
         vals = [v for v in vals if v is not None and np.isfinite(v)]
@@ -236,61 +449,76 @@ def summarise(report):
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2])
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--dataset", default="synthetic",
+                    help="'synthetic' or a bio_perturbations dataset id (norman_2019, ...)")
+    ap.add_argument("--space", default="logexpr", choices=["logexpr", "vae"])
     ap.add_argument("--ks", type=int, nargs="+", default=[1, 4])
+    ap.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2])
     ap.add_argument("--updates", type=int, default=3000)
     ap.add_argument("--n_steps", type=int, default=10)
     ap.add_argument("--n_gen", type=int, default=300)
+    # VAE
+    ap.add_argument("--latent-dim", type=int, default=16)
+    ap.add_argument("--vae-epochs", type=int, default=60)
+    # real-data prep
+    ap.add_argument("--n-hvg", type=int, default=2000)
+    ap.add_argument("--max-perts", type=int, default=20)
+    ap.add_argument("--max-cells-per-cond", type=int, default=400)
+    ap.add_argument("--n-pseudoreplicates", type=int, default=2)
+    ap.add_argument("--test-fraction", type=float, default=0.3)
+    ap.add_argument("--cache-dir", default=None)
+    ap.add_argument("--strict-dataset", action="store_true",
+                    help="fail (don't fall back to synthetic) if the real load fails")
+    ap.add_argument("--out", default=None, help="results json path")
     args = ap.parse_args()
 
-    # Fixed benchmark data: train_reference + held-out truth (same biology)
-    train_ref = make_perturbseq(seed=0)
-    truth = make_perturbseq(seed=1)
+    train_ref, truth, source_note = get_data(args)
     genes = list(train_ref.var_names)
-    conditions = list(pd.unique(train_ref.obs["condition"]))       # ["control", "KO_..."]
+    conditions = list(pd.unique(train_ref.obs["condition"]))
     perts = [c for c in conditions if c != "control"]
+    print(f"[data] {source_note}: {train_ref.n_obs} train / {truth.n_obs} truth cells, "
+          f"{len(genes)} genes, {len(perts)} perturbations")
 
-    # Standardise log1p(counts) for the flow model
-    Xlog = np.log1p(np.asarray(train_ref.X, dtype=float))
-    mu, sd = Xlog.mean(0), Xlog.std(0) + 1e-6
-    Z = (Xlog - mu) / sd
+    # representation space (logexpr or trained VAE latent)
+    train_counts = _dense(train_ref.layers.get("counts", train_ref.X))
+    space = build_space(args.space, args.latent_dim, args.vae_epochs, seed=0).fit(train_counts)
+    print(f"[space] {space.name}: flow dim = {space.dim}")
+    Z = space.encode(train_counts)
     cond_ids = np.array([conditions.index(c) for c in train_ref.obs["condition"]])
 
-    evaluator = BenchmarkEvaluator.from_anndata(train_ref, n_pca_components=20,
+    n_pca = int(min(20, len(genes) - 1, train_ref.n_obs - 1))
+    evaluator = BenchmarkEvaluator.from_anndata(train_ref, n_pca_components=n_pca,
                                                 min_matched_samples=2)
 
     results = {}
-    # --- bio-perturbations reference baselines ---
     for name, obj in [("identity", IdentityBaseline()), ("mean_shift", MeanShiftBaseline())]:
-        pred = baseline_predictions(obj, train_ref, perts, "control", genes, args.n_gen)
-        rep = evaluator.evaluate_anndata(pred, truth)
+        rep = evaluator.evaluate_anndata(baseline_predictions(obj, train_ref, perts), truth)
         results[name] = summarise(rep)
         print(f"[baseline {name}] " + " ".join(f"{k}={v:.4f}" for k, v in results[name].items()))
 
-    # --- flow models: baseline K=1 vs XM K>1, averaged over seeds ---
     for k in args.ks:
         per_seed = []
         for s in args.seeds:
             model = fit_flow(Z, cond_ids, len(conditions), best_of_k=k, seed=s, updates=args.updates)
-            pred = flow_predictions(model, conditions, "control", genes, mu, sd,
+            pred = flow_predictions(model, space, conditions, "control", genes,
                                     n_gen=args.n_gen, n_steps=args.n_steps)
-            rep = evaluator.evaluate_anndata(pred, truth)
-            per_seed.append(summarise(rep))
+            per_seed.append(summarise(evaluator.evaluate_anndata(pred, truth)))
             tag = "baseline flow (K=1)" if k == 1 else f"XM flow (K={k})"
             print(f"[{tag} seed={s}] " + " ".join(f"{kk}={vv:.4f}" for kk, vv in per_seed[-1].items()))
         agg = {kk: float(np.mean([ps[kk] for ps in per_seed])) for kk in per_seed[0]}
-        agg_std = {kk + "_std": float(np.std([ps[kk] for ps in per_seed])) for kk in per_seed[0]}
+        agg.update({kk + "_std": float(np.std([ps[kk] for ps in per_seed])) for kk in per_seed[0]})
         label = "flow_K1" if k == 1 else f"flow_XM_K{k}"
-        results[label] = {**agg, **agg_std}
-        print(f"==> {label} AGG: " + " ".join(f"{kk}={agg[kk]:.4f}" for kk in agg) + "\n")
+        results[label] = agg
+        print(f"==> {label} AGG: " + " ".join(f"{kk}={agg[kk]:.4f}" for kk in list(agg)[:5]) + "\n")
 
-    out = {"config": vars(args), "conditions": conditions, "results": results,
-           "note": "synthetic Perturb-seq (real dataset egress blocked in sandbox); "
-                   "metrics from bio_perturbations.evaluator (real)"}
-    with open(os.path.join(HERE, "scldm_bio_results.json"), "w") as f:
+    out = {"config": vars(args), "source": source_note, "space": space.name,
+           "flow_dim": int(space.dim), "conditions": conditions, "results": results}
+    out_path = args.out or os.path.join(HERE, f"scldm_bio_results_{args.dataset}_{space.name}.json")
+    with open(out_path, "w") as f:
         json.dump(out, f, indent=2)
-    print("wrote scldm_bio_results.json")
+    print("wrote", out_path)
 
 
 if __name__ == "__main__":

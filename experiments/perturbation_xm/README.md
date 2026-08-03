@@ -244,3 +244,71 @@ python scldm_bio_eval.py --seeds 0 1 2 --ks 1 4 --updates 3000 --n_steps 2    # 
 
 Files: `scldm_bio_eval.py` (harness), `scldm_bio_run.log` / `scldm_bio_run_2step.log`
 (full per-seed output), `scldm_bio_results*.json`.
+
+---
+
+## 8. VAE-latent scLDM variant + real-data path
+
+`scldm_bio_eval.py` has two CLI axes so the *same* XM wrapper and evaluator run
+against a truer scLDM and against real Perturb-seq:
+
+| flag | values | meaning |
+| --- | --- | --- |
+| `--space` | `logexpr` (default) · `vae` | run the conditional flow in standardised log1p **gene space**, or in a **trained VAE latent** (encode → flow+XM in latent → decode). `vae` is the scLDM-shaped model. |
+| `--dataset` | `synthetic` (default) · `norman_2019` · `replogle_2022_k562` · `adamson_2016` · … | synthetic generator, or a real pertpy dataset via `bio_perturbations.datasets`. |
+
+### 8a. VAE-latent variant (`--space vae`)
+
+A small Gaussian VAE over standardised log1p expression is trained on the train
+cells; the flow (baseline `K=1` vs XM `K=4`) then runs in its latent (encoder
+mean), and generated latents are decoded back to non-negative expression for
+scoring. This is a conditional **latent** generative model — the scLDM shape.
+Swap this Gaussian-on-log1p VAE for scVI's negative-binomial VAE and it is scLDM
+proper; the XM plumbing and the evaluation are byte-for-byte unchanged.
+
+Converged synthetic result (VAE latent dim 16, 3 seeds, 10-step): the same
+pattern as gene space — **XM improves the distribution metric**, E-distance
+`8.27 → 7.97`, lower on *every* seed (K1 `8.28/8.22/8.30` vs XM `7.91/8.04/7.96`),
+while mean-level PCC-Δ (`0.851→0.849`) and DEG recovery stay flat and MSE-Δ ticks
+up (`6.50→7.65`) — the same precision-vs-calibration trade. Numbers in
+`scldm_vae_run.log` / `scldm_bio_results_synthetic_vae.json`. That the effect
+survives the encode→decode round-trip is the point: XM helps in the *latent* the
+generator actually models, which is where scLDM lives.
+
+```bash
+python scldm_bio_eval.py --dataset synthetic --space vae \
+    --latent-dim 16 --vae-epochs 60 --seeds 0 1 2 --ks 1 4 --updates 3000
+```
+
+### 8b. Real Perturb-seq (`--dataset norman_2019`, …)
+
+The loader path is fully wired: `bio_perturbations.datasets.load_dataset` →
+tractability subsetting (`--n-hvg`, `--max-perts`, `--max-cells-per-cond`) →
+**cell-level** train/truth holdout (same perturbations in both — the
+distribution-recovery task the model is built for) → pseudo-replicate
+`sample_id` for DESeq2. Because real Perturb-seq usually lacks biological
+replicates, cells within each condition are partitioned into
+`--n-pseudoreplicates` groups; this **underestimates biological variance** and is
+fine for a relative model comparison, not absolute significance claims.
+
+> **Sandbox note.** The dataset download hosts (figshare, `exampledata.scverse.org`)
+> are egress-blocked here, so a real run in *this* environment prints a loud
+> WARNING and falls back to synthetic (verified: it resolves
+> `exampledata.scverse.org/pertpy/norman_2019_raw.h5ad` then hits a proxy 403).
+> Pass `--strict-dataset` to fail instead of falling back.
+
+In an **egress-open** environment (ideally a GPU box):
+
+```bash
+pip install -e /path/to/bio-perturbations".[prep,datasets]"   # adds pertpy loaders
+python scldm_bio_eval.py --dataset norman_2019 --space vae \
+    --n-hvg 2000 --max-perts 20 --max-cells-per-cond 400 \
+    --seeds 0 1 2 --ks 1 4 --updates 5000 --strict-dataset
+```
+
+Everything downstream — model, XM wrapper, evaluator, baselines — is identical to
+the synthetic run; only `get_data()` changes. To use scLDM's own network/VAE
+instead of the built-in one, replace `build_space("vae", …)` with an adapter that
+`encode`s/`decode`s through the trained scLDM VAE and keep the rest.
+
+Files: `scldm_vae_run.log` (converged VAE run), `scldm_bio_results_synthetic_vae.json`.
