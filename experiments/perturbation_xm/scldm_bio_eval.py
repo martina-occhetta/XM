@@ -11,13 +11,15 @@ This harness has two axes, both selectable from the CLI:
              runnable). Any other id is loaded through `bio_perturbations.datasets`
              (pertpy) -- real Perturb-seq. See "Running on real data" below.
 
-  --space    logexpr | vae
+  --space    logexpr | vae | nbvae
              `logexpr` = flow runs in standardised log1p expression space (default).
-             `vae`     = a small scLDM-style VAE is trained first and the flow runs
-             in its LATENT space (encode -> flow+XM in latent -> decode). This is a
-             truer scLDM: a conditional latent generative model over a learned VAE
-             code. Swap the Gaussian-on-log1p VAE here for scVI's NB VAE and it is
-             scLDM proper; the XM wrapper and evaluation are unchanged either way.
+             `vae`     = a small scLDM-style Gaussian VAE (on log1p) is trained first
+             and the flow runs in its LATENT space (encode -> flow+XM in latent ->
+             decode). A conditional latent generative model over a learned code.
+             `nbvae`   = the same, but with scVI's negative-binomial count decoder
+             (library-scaled softmax proportions + per-gene dispersion) -- the
+             count-likelihood generative model scLDM/scVI actually use.
+             The XM wrapper and evaluation are unchanged across all three.
 
 The exploration engine is the repo's real `xm_chunked_best_of_k` (vendored verbatim
 in xm_core.py). Baseline = `--ks 1`; XM = `--ks 4` (etc). Everything is CPU-friendly.
@@ -336,9 +338,111 @@ class VAESpace:
         return np.clip(np.expm1(Yhat * self.sd + self.mu), 0.0, None)
 
 
+class NBVAE(nn.Module):
+    """scVI-style negative-binomial VAE.
+
+    Generative model (per cell): z ~ N(0,I); the decoder maps z to gene
+    proportions rho = softmax(dec(z)); with observed library size l the mean is
+    mu = l * rho, and counts x ~ NB(mu, theta) with a per-gene inverse-dispersion
+    theta. This is the count-likelihood decoder scLDM/scVI actually use, versus
+    the Gaussian-on-log1p VAE above.
+    """
+
+    def __init__(self, n_genes, latent_dim, hidden=256):
+        super().__init__()
+        self.enc = nn.Sequential(nn.Linear(n_genes, hidden), nn.SiLU(),
+                                 nn.Linear(hidden, hidden), nn.SiLU())
+        self.fc_mu = nn.Linear(hidden, latent_dim)
+        self.fc_logvar = nn.Linear(hidden, latent_dim)
+        self.dec = nn.Sequential(nn.Linear(latent_dim, hidden), nn.SiLU(),
+                                 nn.Linear(hidden, hidden), nn.SiLU(),
+                                 nn.Linear(hidden, n_genes))
+        self.log_theta = nn.Parameter(torch.zeros(n_genes))  # per-gene inverse dispersion
+
+    def encode(self, x_enc):
+        h = self.enc(x_enc)
+        return self.fc_mu(h), self.fc_logvar(h)
+
+    def rho(self, z):
+        return torch.softmax(self.dec(z), dim=-1)  # gene proportions, sum to 1
+
+
+def nb_neg_log_likelihood(x, mu, theta, eps=1e-8):
+    """-log NB(x; mean=mu, inverse-dispersion=theta), summed over genes."""
+    theta = theta + eps
+    mu = mu + eps
+    log_theta_mu = torch.log(theta + mu)
+    ll = (theta * (torch.log(theta) - log_theta_mu)
+          + x * (torch.log(mu) - log_theta_mu)
+          + torch.lgamma(x + theta) - torch.lgamma(theta) - torch.lgamma(x + 1.0))
+    return -ll.sum(dim=-1)
+
+
+class NBVAESpace:
+    """scVI-style NB-VAE; flow runs in the latent, decode returns the NB mean.
+
+    Drop-in alternative to `VAESpace` (`--space nbvae`). Encoder input is
+    standardised log1p counts (for stable optimisation); the decoder/likelihood
+    operate on raw counts with an observed library size, exactly as scVI does.
+    """
+
+    name = "nbvae"
+
+    def __init__(self, latent_dim=16, epochs=80, beta=1e-3, lr=1e-3, batch=256, seed=0):
+        self.latent_dim, self.epochs, self.beta = latent_dim, epochs, beta
+        self.lr, self.batch, self.seed = lr, batch, seed
+
+    def _enc_input(self, counts):
+        Y = np.log1p(np.asarray(counts, dtype=float))
+        return (Y - self.mu) / self.sd
+
+    def fit(self, train_counts):
+        torch.manual_seed(self.seed)
+        X = np.asarray(train_counts, dtype=float)
+        Y = np.log1p(X)
+        self.mu, self.sd = Y.mean(0), Y.std(0) + 1e-6
+        self.lib_scale = float(np.median(X.sum(1)))  # library size for generation
+        Xenc = torch.tensor((Y - self.mu) / self.sd, dtype=torch.float32, device=DEVICE)
+        Xcount = torch.tensor(X, dtype=torch.float32, device=DEVICE)
+        lib = Xcount.sum(dim=1, keepdim=True)  # observed per-cell library
+        n_genes = Xenc.shape[1]
+        self.vae = NBVAE(n_genes, self.latent_dim).to(DEVICE)
+        opt = torch.optim.Adam(self.vae.parameters(), lr=self.lr)
+        N = Xenc.shape[0]
+        steps = max(1, N // self.batch)
+        self.vae.train()
+        for _ in range(self.epochs):
+            perm = torch.randperm(N, device=DEVICE)
+            for b in range(steps):
+                sel = perm[b * self.batch:(b + 1) * self.batch]
+                xe, xc, lb = Xenc[sel], Xcount[sel], lib[sel]
+                mu_z, logvar = self.vae.encode(xe)
+                z = mu_z + torch.randn_like(mu_z) * torch.exp(0.5 * logvar)
+                nb_mean = lb * self.vae.rho(z)
+                recon = nb_neg_log_likelihood(xc, nb_mean, torch.exp(self.vae.log_theta)).mean()
+                kl = -0.5 * (1 + logvar - mu_z.pow(2) - logvar.exp()).sum(1).mean()
+                loss = recon + self.beta * kl
+                opt.zero_grad(); loss.backward(); opt.step()
+        self.vae.eval()
+        self.dim = self.latent_dim
+        return self
+
+    @torch.no_grad()
+    def encode(self, counts):
+        xe = torch.tensor(self._enc_input(counts), dtype=torch.float32, device=DEVICE)
+        return self.vae.encode(xe)[0].cpu().numpy()
+
+    @torch.no_grad()
+    def decode(self, Z):
+        rho = self.vae.rho(torch.tensor(Z, dtype=torch.float32, device=DEVICE)).cpu().numpy()
+        return self.lib_scale * rho  # NB mean at the median library size (non-negative)
+
+
 def build_space(name, latent_dim, vae_epochs, seed):
     if name == "logexpr":
         return LogExprSpace()
+    if name == "nbvae":
+        return NBVAESpace(latent_dim=latent_dim, epochs=vae_epochs, seed=seed)
     if name == "vae":
         return VAESpace(latent_dim=latent_dim, epochs=vae_epochs, seed=seed)
     raise ValueError(f"unknown space {name!r}")
@@ -453,7 +557,7 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dataset", default="synthetic",
                     help="'synthetic' or a bio_perturbations dataset id (norman_2019, ...)")
-    ap.add_argument("--space", default="logexpr", choices=["logexpr", "vae"])
+    ap.add_argument("--space", default="logexpr", choices=["logexpr", "vae", "nbvae"])
     ap.add_argument("--ks", type=int, nargs="+", default=[1, 4])
     ap.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2])
     ap.add_argument("--updates", type=int, default=3000)

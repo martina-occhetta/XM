@@ -257,27 +257,38 @@ against a truer scLDM and against real Perturb-seq:
 | `--space` | `logexpr` (default) · `vae` | run the conditional flow in standardised log1p **gene space**, or in a **trained VAE latent** (encode → flow+XM in latent → decode). `vae` is the scLDM-shaped model. |
 | `--dataset` | `synthetic` (default) · `norman_2019` · `replogle_2022_k562` · `adamson_2016` · … | synthetic generator, or a real pertpy dataset via `bio_perturbations.datasets`. |
 
-### 8a. VAE-latent variant (`--space vae`)
+### 8a. Latent-space variants (`--space vae`, `--space nbvae`)
 
-A small Gaussian VAE over standardised log1p expression is trained on the train
-cells; the flow (baseline `K=1` vs XM `K=4`) then runs in its latent (encoder
-mean), and generated latents are decoded back to non-negative expression for
-scoring. This is a conditional **latent** generative model — the scLDM shape.
-Swap this Gaussian-on-log1p VAE for scVI's negative-binomial VAE and it is scLDM
-proper; the XM plumbing and the evaluation are byte-for-byte unchanged.
+Two scLDM-shaped variants train a VAE on the cells first, then run the flow
+(baseline `K=1` vs XM `K=4`) **in the VAE latent** (encoder mean), decoding
+generated latents back to non-negative expression for scoring:
 
-Converged synthetic result (VAE latent dim 16, 3 seeds, 10-step): the same
-pattern as gene space — **XM improves the distribution metric**, E-distance
-`8.27 → 7.97`, lower on *every* seed (K1 `8.28/8.22/8.30` vs XM `7.91/8.04/7.96`),
-while mean-level PCC-Δ (`0.851→0.849`) and DEG recovery stay flat and MSE-Δ ticks
-up (`6.50→7.65`) — the same precision-vs-calibration trade. Numbers in
-`scldm_vae_run.log` / `scldm_bio_results_synthetic_vae.json`. That the effect
-survives the encode→decode round-trip is the point: XM helps in the *latent* the
-generator actually models, which is where scLDM lives.
+- **`vae`** — Gaussian VAE over standardised log1p expression.
+- **`nbvae`** — scVI-style **negative-binomial** count decoder: latent →
+  `softmax` gene proportions `ρ`, mean `μ = library · ρ`, counts `~ NB(μ, θ)`
+  with a per-gene dispersion `θ`. This is the count-likelihood generative model
+  scLDM/scVI actually use — the "scLDM proper" decoder.
+
+The XM wrapper and the biological evaluation are byte-for-byte identical across
+all three spaces. **The XM effect is consistent everywhere** — E-distance (the
+heterogeneity metric), 3 seeds, 10-step, `K=1 → XM K=4`:
+
+| space (flow dim) | E-distance `K=1` → `XM K=4` | mean-level (PCC-Δ / DEG) |
+| --- | --- | --- |
+| `logexpr` — gene space (50)        | 7.99 → **7.66** | ~flat |
+| `vae` — Gaussian latent (16)       | 8.27 → **7.97** | ~flat |
+| `nbvae` — scVI NB latent (16)      | 8.41 → **8.18** | ~flat |
+
+Every space: XM lowers E-distance (lower on every seed), mean-level PCC-Δ / DEG
+recovery stay flat and MSE-Δ ticks up — the same precision-vs-calibration trade.
+That the effect **survives the encode→decode round-trip, including the true NB
+count decoder**, is the point: XM helps in the latent the generator actually
+models, which is where scLDM lives. Numbers in `scldm_{vae,nbvae}_run.log` /
+`scldm_bio_results_synthetic_{vae,nbvae}.json`.
 
 ```bash
-python scldm_bio_eval.py --dataset synthetic --space vae \
-    --latent-dim 16 --vae-epochs 60 --seeds 0 1 2 --ks 1 4 --updates 3000
+python scldm_bio_eval.py --dataset synthetic --space vae   --latent-dim 16 --vae-epochs 60 --seeds 0 1 2 --ks 1 4 --updates 3000
+python scldm_bio_eval.py --dataset synthetic --space nbvae --latent-dim 16 --vae-epochs 80 --seeds 0 1 2 --ks 1 4 --updates 3000
 ```
 
 ### 8b. Real Perturb-seq (`--dataset norman_2019`, …)
