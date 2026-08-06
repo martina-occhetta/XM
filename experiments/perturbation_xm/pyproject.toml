@@ -38,7 +38,7 @@ bio = [
 ]
 # The above plus pertpy loaders for real Perturb-seq (Norman/Replogle/Adamson/Tian).
 datasets = [
-    "bio-perturbations[prep,datasets] @ git+https://github.com/martina-occhetta/bio-perturbations",
+    "bio-perturbations[prep,datasets] @ git@github.com:martina-occhetta/bio-perturbations.git",
 ]
 
 [project.urls]
