@@ -62,7 +62,9 @@ from bio_perturbations.evaluator import BenchmarkEvaluator
 from bio_perturbations.io import make_prediction_anndata
 from bio_perturbations.baselines import IdentityBaseline, MeanShiftBaseline
 
-DEVICE = "cpu"
+# Device: auto-detect CUDA, override with XM_DEVICE=cpu|cuda|cuda:0 (e.g. on a
+# GPU cluster node). The bio-perturbations evaluation itself is CPU/numpy.
+DEVICE = os.environ.get("XM_DEVICE") or ("cuda" if torch.cuda.is_available() else "cpu")
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 

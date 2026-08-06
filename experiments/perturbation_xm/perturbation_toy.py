@@ -41,7 +41,7 @@ import torch.nn as nn
 
 from xm_core import xm_chunked_best_of_k
 
-DEVICE = "cpu"
+DEVICE = os.environ.get("XM_DEVICE") or ("cuda" if torch.cuda.is_available() else "cpu")
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 

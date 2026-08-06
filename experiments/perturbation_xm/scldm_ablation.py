@@ -81,7 +81,9 @@ def main():
     ap.add_argument("--cache-dir", default=None)
     ap.add_argument("--strict-dataset", action="store_true")
     ap.add_argument("--plot", action="store_true")
+    ap.add_argument("--out-dir", default=HERE, help="where to write the json/png (default: script dir)")
     args = ap.parse_args()
+    os.makedirs(args.out_dir, exist_ok=True)
 
     train_ref, truth, source_note = get_data(args)
     genes = list(train_ref.var_names)
@@ -156,7 +158,7 @@ def main():
                       for n, b in baselines.items()},
         "grid": {str(k): {str(s): grid[k][s] for s in args.steps} for k in args.ks},
     }
-    out_path = os.path.join(HERE, f"scldm_ablation_{args.dataset}_{space.name}.json")
+    out_path = os.path.join(args.out_dir, f"scldm_ablation_{args.dataset}_{space.name}.json")
     with open(out_path, "w") as f:
         json.dump(out, f, indent=2)
     print("\nwrote", out_path)
