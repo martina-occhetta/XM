@@ -34,7 +34,7 @@ dependencies = [
 # pathway metrics + PyDESeq2 truth-side DEGs). NOTE: bio-perturbations requires
 # Python >= 3.12, so install this extra under a 3.12+ interpreter.
 bio = [
-    "bio-perturbations[prep] @ git+https://github.com/martina-occhetta/bio-perturbations",
+    "bio-perturbations[prep] @ git@github.com:martina-occhetta/bio-perturbations.git",
 ]
 # The above plus pertpy loaders for real Perturb-seq (Norman/Replogle/Adamson/Tian).
 datasets = [
