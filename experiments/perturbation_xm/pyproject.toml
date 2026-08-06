@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "perturbation-xm"
+version = "0.1.0"
+description = "Explorative Modeling (best-of-K exploration) applied to single-cell perturbation-response generative models (scLDM-shaped), with biological evaluation."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [{ name = "Martina Occhetta" }]
+keywords = [
+    "perturbation-response", "single-cell", "Perturb-seq", "scLDM",
+    "explorative-modeling", "flow-matching", "generative-models", "drug-discovery",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+
+# Core: runs the 2-D toy (perturbation_toy.py) and the flow/VAE models.
+dependencies = [
+    "numpy",
+    "torch",
+    "pandas",
+    "matplotlib",
+    "anndata",
+]
+
+[project.optional-dependencies]
+# Biological evaluation via the bio-perturbations framework (DEG / E-distance /
+# pathway metrics + PyDESeq2 truth-side DEGs). NOTE: bio-perturbations requires
+# Python >= 3.12, so install this extra under a 3.12+ interpreter.
+bio = [
+    "bio-perturbations[prep] @ git+https://github.com/martina-occhetta/bio-perturbations",
+]
+# The above plus pertpy loaders for real Perturb-seq (Norman/Replogle/Adamson/Tian).
+datasets = [
+    "bio-perturbations[prep,datasets] @ git+https://github.com/martina-occhetta/bio-perturbations",
+]
+
+[project.urls]
+"Explorative Modeling" = "https://explorative-modeling.github.io/"
+"bio-perturbations" = "https://github.com/martina-occhetta/bio-perturbations"
+
+[tool.setuptools]
+# Flat layout: the experiment scripts are importable top-level modules.
+py-modules = ["xm_core", "perturbation_toy", "scldm_bio_eval", "scldm_ablation"]
