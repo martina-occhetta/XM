@@ -1,0 +1,79 @@
+{
+  "config": {
+    "dataset": "synthetic",
+    "space": "nbvae",
+    "ks": [
+      1,
+      4
+    ],
+    "seeds": [
+      0,
+      1,
+      2
+    ],
+    "updates": 3000,
+    "n_steps": 10,
+    "n_gen": 300,
+    "latent_dim": 16,
+    "vae_epochs": 80,
+    "n_hvg": 2000,
+    "max_perts": 20,
+    "max_cells_per_cond": 400,
+    "n_pseudoreplicates": 2,
+    "test_fraction": 0.3,
+    "cache_dir": null,
+    "strict_dataset": false,
+    "out": null
+  },
+  "source": "synthetic Perturb-seq",
+  "space": "nbvae",
+  "flow_dim": 16,
+  "conditions": [
+    "control",
+    "KO_g29",
+    "KO_g24",
+    "KO_g13",
+    "KO_g15",
+    "KO_g39"
+  ],
+  "results": {
+    "identity": {
+      "pcc_delta": -0.00278034740482294,
+      "mse_delta": 11.378530676514558,
+      "deg_dir_recall@20": 0.24000000000000005,
+      "deg_dir_recall@50": 0.4938775510204082,
+      "energy_distance": 8.32402686034931
+    },
+    "mean_shift": {
+      "pcc_delta": 0.32006870254635916,
+      "mse_delta": 11.590331293125432,
+      "deg_dir_recall@20": 0.32,
+      "deg_dir_recall@50": 0.5673469387755101,
+      "energy_distance": 9.170574245036274
+    },
+    "flow_K1": {
+      "pcc_delta": 0.8551411805744539,
+      "mse_delta": 4.993955262972482,
+      "deg_dir_recall@20": 0.5133333333333333,
+      "deg_dir_recall@50": 0.5795918367346938,
+      "energy_distance": 8.405065380156953,
+      "pcc_delta_std": 0.0014736946564211705,
+      "mse_delta_std": 0.46589464274122455,
+      "deg_dir_recall@20_std": 0.024944382578492907,
+      "deg_dir_recall@50_std": 0.012016001178677361,
+      "energy_distance_std": 0.07783632414353964
+    },
+    "flow_XM_K4": {
+      "pcc_delta": 0.8533203389905947,
+      "mse_delta": 5.584014636039048,
+      "deg_dir_recall@20": 0.5133333333333333,
+      "deg_dir_recall@50": 0.5714285714285713,
+      "energy_distance": 8.178209199305755,
+      "pcc_delta_std": 0.0020598142872001813,
+      "mse_delta_std": 0.6291610715831613,
+      "deg_dir_recall@20_std": 0.024944382578492876,
+      "deg_dir_recall@50_std": 0.00999791731748239,
+      "energy_distance_std": 0.049417051075381094
+    }
+  }
+}

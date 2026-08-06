@@ -1,0 +1,14 @@
+[baseline identity] pcc_delta=-0.0028 mse_delta=11.3785 deg_dir_recall@20=0.2400 deg_dir_recall@50=0.4939 energy_distance=8.3240
+[baseline mean_shift] pcc_delta=0.3201 mse_delta=11.5903 deg_dir_recall@20=0.3200 deg_dir_recall@50=0.5673 energy_distance=9.1706
+[baseline flow (K=1) seed=0] pcc_delta=0.8475 mse_delta=6.5938 deg_dir_recall@20=0.5200 deg_dir_recall@50=0.5755 energy_distance=7.9760
+[baseline flow (K=1) seed=1] pcc_delta=0.8488 mse_delta=6.5508 deg_dir_recall@20=0.5700 deg_dir_recall@50=0.5633 energy_distance=8.0045
+[baseline flow (K=1) seed=2] pcc_delta=0.8479 mse_delta=8.2105 deg_dir_recall@20=0.5100 deg_dir_recall@50=0.5469 energy_distance=7.9762
+==> flow_K1 AGG: pcc_delta=0.8481 mse_delta=7.1184 deg_dir_recall@20=0.5333 deg_dir_recall@50=0.5619 energy_distance=7.9856
+
+[XM flow (K=4) seed=0] pcc_delta=0.8354 mse_delta=6.6097 deg_dir_recall@20=0.4900 deg_dir_recall@50=0.5102 energy_distance=7.6147
+[XM flow (K=4) seed=1] pcc_delta=0.8356 mse_delta=7.1232 deg_dir_recall@20=0.5200 deg_dir_recall@50=0.5429 energy_distance=7.7463
+[XM flow (K=4) seed=2] pcc_delta=0.8419 mse_delta=7.2733 deg_dir_recall@20=0.4900 deg_dir_recall@50=0.5755 energy_distance=7.6362
+==> flow_XM_K4 AGG: pcc_delta=0.8376 mse_delta=7.0021 deg_dir_recall@20=0.5000 deg_dir_recall@50=0.5429 energy_distance=7.6657
+
+wrote scldm_bio_results.json
+DONE exit=0

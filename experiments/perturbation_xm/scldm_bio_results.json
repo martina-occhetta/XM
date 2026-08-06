@@ -1,0 +1,65 @@
+{
+  "config": {
+    "seeds": [
+      0,
+      1,
+      2
+    ],
+    "ks": [
+      1,
+      4
+    ],
+    "updates": 3000,
+    "n_steps": 2,
+    "n_gen": 300
+  },
+  "conditions": [
+    "control",
+    "KO_g29",
+    "KO_g24",
+    "KO_g13",
+    "KO_g15",
+    "KO_g39"
+  ],
+  "results": {
+    "identity": {
+      "pcc_delta": -0.00278034740482294,
+      "mse_delta": 11.378530676514558,
+      "deg_dir_recall@20": 0.24000000000000005,
+      "deg_dir_recall@50": 0.4938775510204082,
+      "energy_distance": 8.32402686034931
+    },
+    "mean_shift": {
+      "pcc_delta": 0.32006870254635916,
+      "mse_delta": 11.590331293125432,
+      "deg_dir_recall@20": 0.32,
+      "deg_dir_recall@50": 0.5673469387755101,
+      "energy_distance": 9.170574245036274
+    },
+    "flow_K1": {
+      "pcc_delta": 0.8476111884063601,
+      "mse_delta": 7.957400432327923,
+      "deg_dir_recall@20": 0.5166666666666667,
+      "deg_dir_recall@50": 0.5564625850340136,
+      "energy_distance": 8.83454350155187,
+      "pcc_delta_std": 0.0011289980334054492,
+      "mse_delta_std": 0.24034186550585332,
+      "deg_dir_recall@20_std": 0.04496912521077342,
+      "deg_dir_recall@50_std": 0.005090690322141389,
+      "energy_distance_std": 0.03021169028999797
+    },
+    "flow_XM_K4": {
+      "pcc_delta": 0.8400835864660867,
+      "mse_delta": 6.408161512543141,
+      "deg_dir_recall@20": 0.5066666666666667,
+      "deg_dir_recall@50": 0.5401360544217687,
+      "energy_distance": 8.207719278392053,
+      "pcc_delta_std": 0.002174564774639605,
+      "mse_delta_std": 0.3426170605272093,
+      "deg_dir_recall@20_std": 0.004714045207910321,
+      "deg_dir_recall@50_std": 0.015027702064200305,
+      "energy_distance_std": 0.06397429765158794
+    }
+  },
+  "note": "synthetic Perturb-seq (real dataset egress blocked in sandbox); metrics from bio_perturbations.evaluator (real)"
+}

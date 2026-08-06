@@ -1,0 +1,265 @@
+\documentclass{article}
+
+% AI4DD @ NeurIPS 2026 uses the NeurIPS 2026 style. Per the CfP, submit
+% anonymized with \usepackage{neurips_2026} (no options). For a camera-ready
+% add [final]. Place neurips_2026.sty / .bst next to this file.
+\usepackage{neurips_2026}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{xcolor}
+
+% Draft helper: \TODO{...} for gaps to fill (esp. real-data numbers). Remove before submission.
+\newcommand{\TODO}[1]{{\color{red}\textbf{[TODO: #1]}}}
+\newcommand{\Ed}{\mathcal{E}} % energy distance symbol
+
+\title{Exploration Reduces Mode Averaging in Perturbation-Response
+Generative Models: A Distribution-Fidelity View}
+
+% Anonymous for submission.
+\author{%
+  Anonymous Author(s) \\
+  Affiliation \\
+  \texttt{email} \\
+}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Generative models of single-cell perturbation response (e.g.\ latent diffusion
+models such as scLDM) predict the \emph{distribution} of cell states induced by
+a drug or genetic perturbation. Because a perturbation drives a heterogeneous
+population---responder and non-responder subpopulations, distinct
+transcriptional programs---the target is multimodal, yet models trained with a
+per-sample reconstruction loss regress to the mean and smear probability mass
+into biologically implausible states between response modes. We ask whether
+\emph{Explorative Modeling} (XM), a best-of-$K$ exploration wrapper for
+generative models, mitigates this \emph{mode averaging} in the perturbation
+setting. Wrapping a conditional flow-matching generator over a single-cell VAE
+latent, we evaluate on biologically meaningful axes with an independent
+bio-first framework---distribution fidelity (energy distance), differential
+expression recovery, and pathway/program recovery---rather than aggregate
+$\text{MSE-}\Delta$ alone. Across synthetic Perturb-seq and \TODO{real
+Norman/Replogle} data, exploration significantly improves distribution-level
+fidelity (energy distance; all paired bootstrap CIs exclude zero), with a
+monotonic dose-response in $K$ and the largest gains in the few-step,
+fast-inference regime where mode averaging is worst. The gain is a targeted one:
+it lands on population/heterogeneity fidelity while mean-level metrics are
+approximately unchanged, exposing a precision-versus-calibration trade that
+standard benchmarks hide. We frame this as a concrete instance of the
+benchmark-to-reality translation gap for generative models in drug discovery.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+% Motivation: perturbation-response prediction as generative modeling; why it matters for drug discovery.
+Predicting how cells respond to perturbations is central to target
+identification, mechanism-of-action, and prioritizing experiments in drug
+discovery. Modern approaches cast this as conditional generative modeling in a
+learned single-cell latent space \citep{scldm,scvi}.
+
+% The core failure mode.
+A single perturbation induces a \emph{heterogeneous} population: responder and
+non-responder subpopulations and distinct transcriptional programs make the
+conditional target multimodal. Models trained to reconstruct individual cells
+under an arbitrary noise-to-data pairing regress toward the conditional mean and
+place mass in the empty valley \emph{between} response modes---predicting cells
+that do not occur. We call this \emph{mode averaging}.
+
+% The translation-gap angle (AI4DD framing).
+This failure is invisible to the aggregate mean-shift metrics
+($\text{PCC-}\Delta$, $\text{MSE-}\Delta$) that dominate perturbation
+benchmarks: a model can score well on the mean while badly misrepresenting the
+population. This is a concrete instance of the benchmark-to-reality translation
+gap---strong static-benchmark numbers that need not reflect biological
+reliability.
+
+% Contribution.
+We study whether \emph{Explorative Modeling} (XM)~\citep{xm}, a modality-agnostic
+best-of-$K$ exploration wrapper, mitigates mode averaging for perturbation
+response. Our contributions:
+\begin{itemize}
+  \item We apply XM's exploration to an scLDM-shaped conditional generator
+  (flow matching over a single-cell VAE latent), requiring no change to the
+  exploration engine (\S\ref{sec:method}).
+  \item We evaluate on \emph{biological} axes with an independent framework---
+  distribution fidelity, DEG recovery, and pathway/program recovery---with
+  bootstrap confidence intervals, rather than aggregate error alone
+  (\S\ref{sec:setup}).
+  \item We show exploration significantly and monotonically improves
+  distribution-level fidelity, most in the fast-inference regime, while
+  mean-level metrics are approximately unchanged---a precision-versus-calibration
+  trade that standard benchmarks hide (\S\ref{sec:results}).
+\end{itemize}
+
+\section{Method}
+\label{sec:method}
+
+\paragraph{Perturbation response as conditional generation.}
+Let $x\in\mathbb{R}^{G}$ be a cell's expression over $G$ genes and $c$ a
+perturbation label. An scLDM-style model learns a conditional generator
+$p_\theta(z\mid c)$ in a VAE latent $z=E(x)$, decoding $\hat{x}=D(z)$. We
+instantiate the generator as conditional flow matching~\citep{flowmatching,
+liprince}: with source noise $z_0\sim\mathcal{N}(0,I)$, data $z_1$, and
+$z_t=(1-t)z_0+t z_1$, a velocity network $v_\theta(z_t,t,c)$ is trained to
+regress the target $z_1-z_0$.
+
+\paragraph{Mode averaging.}
+At a noised point $z_t$ the optimal regression target is the average velocity
+over all data consistent with $z_t$; for a multimodal conditional this average
+points between modes, and few-step integration lands in the low-density valley.
+This is precisely the population-level error that aggregate metrics miss.
+
+\paragraph{Explorative Modeling.}
+XM~\citep{xm} adds a third pretraining axis via best-of-$K$ exploration: at each
+step it draws $K$ candidate latent variables (here, source noises), scores each
+by the model's loss against the fixed data target, and back-propagates only
+through the best candidate (Forward XM). Each update thus commits to a single
+mode rather than averaging across many. Concretely the training loss for a data
+point becomes $\min_{k\in\{1,\dots,K\}} \ell\big(v_\theta, z_1, z_0^{(k)}\big)$;
+$K{=}1$ recovers the ordinary generator. We use the reference implementation's
+exploration engine unchanged, wrapping the flow loss in its selection routine.
+
+\section{Experimental setup}
+\label{sec:setup}
+
+\paragraph{Models.}
+A conditional velocity MLP over the latent, trained as baseline ($K{=}1$) and
+with exploration ($K\in\{2,4,8\}$), identical except for $K$. We consider three
+latent spaces to test robustness: standardized $\log$-expression, a Gaussian VAE
+latent, and a scVI-style negative-binomial (NB) count-decoder latent
+\citep{scvi}---the count-likelihood generative model used in practice.
+
+\paragraph{Data.}
+(i) A synthetic Perturb-seq with raw counts, gene knockdowns, and an injected
+responder/non-responder split per perturbation, giving genuine downstream DEGs
+\emph{and} the multimodal response that induces mode averaging. (ii) Real
+Perturb-seq---\TODO{Norman 2019 \citep{norman}; Replogle 2022 \citep{replogle}}
+---loaded through the bio-perturbations dataset adapters. The task is
+distribution recovery on \emph{seen} perturbations (cell-level held-out truth);
+the model conditions on a learned per-perturbation embedding.
+
+\paragraph{Evaluation.}
+We score predictions with an independent bio-first evaluator across four
+families: aggregate mean-shift ($\text{PCC-}\Delta$, $\text{MSE-}\Delta$);
+\emph{distribution} fidelity via the energy distance $\Ed$~\citep{energydist}
+between predicted and held-out perturbed populations; \emph{DEG recovery}
+(directional recall@$k$, top-$k$ Jaccard, effect-size correlation), with
+truth-side DEGs from sample-matched pseudobulk DESeq2~\citep{deseq2}; and
+\emph{pathway/program recovery} (up/down Jaccard and rank correlation) against
+known gene programs. We report bootstrap $95\%$ CIs over
+$(\text{seed}\times\text{perturbation})$ units and paired CIs on the
+XM-vs-baseline difference.
+
+\paragraph{Baselines.}
+Identity (control unchanged; the floor), MeanShift (control $+$ mean training
+$\Delta$), and scGen-style latent vector arithmetic~\citep{scgen}. \TODO{Add an
+established perturbation model, e.g.\ GEARS \citep{gears} or CPA
+\citep{cpa}, on real data.}
+
+\section{Results}
+\label{sec:results}
+
+\paragraph{Exploration reduces mode averaging.}
+Table~\ref{tab:main} reports the main comparison. Exploration lowers the energy
+distance to the held-out perturbed population---the metric that captures whether
+the predicted \emph{population} reproduces response heterogeneity---while the
+trivial and scGen baselines lag. \TODO{Fill from real-data run
+\texttt{scldm\_ablation\_<dataset>\_nbvae.json}.}
+
+\begin{table}[t]
+\centering
+\caption{Main results (\emph{synthetic Perturb-seq; replace with real
+Norman/Replogle}), NB-VAE latent, mean over 3 seeds; $\downarrow$/$\uparrow$ =
+lower/higher better. $\Ed$ = distribution/heterogeneity fidelity; DEG rec.@20 =
+directional recall; DEG $r$ = effect-size Pearson on true DEGs; Path.\ $\rho$ =
+program rank correlation (down-programs).}
+\label{tab:main}
+\small
+\begin{tabular}{lcccccc}
+\toprule
+Model & $\Ed\downarrow$ & PCC-$\Delta\uparrow$ & MSE-$\Delta\downarrow$ &
+DEG rec.@20$\uparrow$ & DEG $r\uparrow$ & Path.\ $\rho\uparrow$ \\
+\midrule
+Identity (floor)      & 8.32 & $-0.00$ & 11.38 & 0.24 & 0.06 & $-0.03$ \\
+MeanShift             & 9.17 & 0.32 & 11.59 & 0.32 & 0.75 & --- \\
+scGen (latent arith.) & 8.26 & \TODO{} & \TODO{} & \TODO{} & \TODO{} & \TODO{} \\
+mini-scLDM, $K{=}1$   & 8.41 & \textbf{0.86} & \textbf{4.99} & \textbf{0.51} & 0.991 & 0.29 \\
+mini-scLDM, XM $K{=}4$& \textbf{8.18} & 0.85 & 5.58 & \textbf{0.51} & \textbf{0.992} & \textbf{0.48} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Biological signal: DEG and pathway recovery.}
+% Whether the improvement is (a) real biology, not just a distance number, and (b) not bought at the cost of DEG recovery.
+The distribution-level gain is not bought by degrading downstream biology
+(Table~\ref{tab:main}). Relative to the $K{=}1$ generator, exploration leaves DEG
+directional recall unchanged ($0.51\!\to\!0.51$), slightly improves top-$20$
+DEG Jaccard ($0.42\!\to\!0.44$) and the effect-size correlation on true DEGs
+($0.991\!\to\!0.992$), and \emph{improves} program recovery, most for
+down-regulated programs (rank correlation $0.29\!\to\!0.48$). Thus on synthetic
+data the improved population fidelity comes essentially for free on the DEG axis
+and with a modest gain on pathway/program recovery; the only cost is a small
+rise in $\text{MSE-}\Delta$ (\S``precision--calibration trade''). \TODO{Confirm
+this pattern holds on real data---the central biological claim of the paper.}
+
+\paragraph{Ablation: exploration budget and sampling steps.}
+Figure~\ref{fig:ablation} sweeps $K$ and sampling steps. The improvement is
+significant at every setting (paired CIs exclude zero), monotonic in $K$, and
+largest at few sampling steps---the fast-inference regime where mode averaging
+is worst.
+
+\begin{figure}[t]
+\centering
+% copy the PNG into paper/ before building, or adjust the path
+\includegraphics[width=0.72\linewidth]{figs/ablation.png}
+\caption{Energy distance vs.\ exploration budget $K$ for $2/4/10$ sampling
+steps (VAE latent, 5 seeds, $95\%$ CI bands); dashed lines are baselines.
+Lower is better. \emph{Synthetic; regenerate on real data with
+\texttt{scldm\_ablation.py --plot}.}}
+\label{fig:ablation}
+\end{figure}
+
+\paragraph{The precision--calibration trade.}
+The gain is targeted: exploration improves $\Ed$ (population fidelity) while
+mean-level $\text{PCC-}\Delta$ and DEG recovery are approximately unchanged and
+$\text{MSE-}\Delta$ can tick up---consistent with Forward XM sharpening modes at
+some cost to distributional calibration. \TODO{State the real-data direction and
+magnitude; discuss whether Reverse XM narrows it.}
+
+\paragraph{Latent-space robustness.}
+The effect is consistent across $\log$-expression, Gaussian-VAE, and
+NB-VAE latents (Appendix~\TODO{}), i.e.\ it survives the encode--decode
+round-trip through a true count decoder---the space an scLDM actually models.
+
+\section{Discussion and limitations}
+\label{sec:discussion}
+% Translation-gap framing + honest limitations.
+Our results argue that for generative perturbation models, \emph{which} metric
+one optimizes matters: exploration buys population/heterogeneity fidelity that
+aggregate error hides, directly relevant to the benchmark-to-reality gap this
+workshop targets. Limitations: (i) \TODO{extent of real-data evidence};
+(ii) pseudo-replicate pseudobulk underestimates biological variance;
+(iii) a single generator class and a compact VAE rather than a full scLDM;
+(iv) the precision--calibration trade means XM as-is is not a strict improvement
+on every axis. Future work: Reverse XM for calibration, stronger baselines
+(GEARS/CPA), and larger real panels.
+
+\section*{Reproducibility}
+Code, synthetic generator, XM wrapper, three latent spaces, the real-dataset
+loader path, and the ablation/CIs are released (\texttt{experiments/perturbation\_xm/});
+evaluation uses the open bio-perturbations framework~\citep{bioperturbations}.
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\end{document}

@@ -1,0 +1,16 @@
+[data] synthetic Perturb-seq: 1800 train / 1800 truth cells, 50 genes, 5 perturbations
+[space] nbvae: flow dim = 16
+[baseline identity] pcc_delta=-0.0028 mse_delta=11.3785 deg_dir_recall@20=0.2400 deg_dir_recall@50=0.4939 energy_distance=8.3240
+[baseline mean_shift] pcc_delta=0.3201 mse_delta=11.5903 deg_dir_recall@20=0.3200 deg_dir_recall@50=0.5673 energy_distance=9.1706
+[baseline flow (K=1) seed=0] pcc_delta=0.8563 mse_delta=4.8944 deg_dir_recall@20=0.5200 deg_dir_recall@50=0.5755 energy_distance=8.5104
+[baseline flow (K=1) seed=1] pcc_delta=0.8531 mse_delta=4.4797 deg_dir_recall@20=0.4800 deg_dir_recall@50=0.5673 energy_distance=8.3246
+[baseline flow (K=1) seed=2] pcc_delta=0.8561 mse_delta=5.6078 deg_dir_recall@20=0.5400 deg_dir_recall@50=0.5959 energy_distance=8.3802
+==> flow_K1 AGG: pcc_delta=0.8551 mse_delta=4.9940 deg_dir_recall@20=0.5133 deg_dir_recall@50=0.5796 energy_distance=8.4051
+
+[XM flow (K=4) seed=0] pcc_delta=0.8504 mse_delta=4.7538 deg_dir_recall@20=0.4800 deg_dir_recall@50=0.5592 energy_distance=8.1097
+[XM flow (K=4) seed=1] pcc_delta=0.8549 mse_delta=6.2764 deg_dir_recall@20=0.5200 deg_dir_recall@50=0.5714 energy_distance=8.2245
+[XM flow (K=4) seed=2] pcc_delta=0.8547 mse_delta=5.7218 deg_dir_recall@20=0.5400 deg_dir_recall@50=0.5837 energy_distance=8.2005
+==> flow_XM_K4 AGG: pcc_delta=0.8533 mse_delta=5.5840 deg_dir_recall@20=0.5133 deg_dir_recall@50=0.5714 energy_distance=8.1782
+
+wrote /home/user/XM/experiments/perturbation_xm/scldm_bio_results_synthetic_nbvae.json
+DONE exit=0
