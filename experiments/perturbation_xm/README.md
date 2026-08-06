@@ -411,3 +411,19 @@ Files: `scldm_bioeval_run.log`, `scldm_bio_results_bioeval.json`.
 29 Aug 2026). Content, tables, and the ablation figure are wired to the result
 files above; `\TODO{}` marks each gap (mostly "swap synthetic numbers for
 real-data numbers"). See `paper/README.md` for the build and fill-in checklist.
+
+---
+
+## 12. Running on a cluster / GPU (`jobs/`)
+
+The scripts are **device-aware**: they auto-detect CUDA, overridable with
+`XM_DEVICE=cpu|cuda`. At the default subset scale CPU is fine; use a GPU when you
+scale up (full genes/cells, more seeds, or a real scLDM network). The
+bio-perturbations scoring (DESeq2/PCA/E-distance) is CPU/numpy regardless.
+
+`jobs/` contains Slurm scripts (Apocrita-styled) that download each real dataset
+**once** and reuse the cache: `00_setup_env.sh` (venv + install),
+`01_download_data.sh` (cache datasets), `02_bio_eval.sh`, `03_ablation.sh`, and
+`submit_all.sh` (dependency chain). Edit the `#SBATCH -A/-p` headers and the
+`python/3.12` module for your cluster (bio-perturbations needs ≥3.12). See
+`jobs/README.md`.
