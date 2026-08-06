@@ -117,6 +117,25 @@ def make_perturbseq(seed, n_genes=50, n_perts=5, cells_per_cond_per_sample=150,
     return adata
 
 
+def perturbseq_gene_sets(n_genes=50, n_perts=5, program_size=8):
+    """Reconstruct the DE programs injected by make_perturbseq as ground-truth
+    gene sets {program_name: [gene, ...]}, replaying the same fixed `bio` RNG.
+
+    Passed to the evaluator as `gene_sets` so the pathway metrics measure whether
+    the model recovers each perturbation's known transcriptional program -- a
+    self-contained pathway-recovery test that needs no external enrichment DB.
+    """
+    genes = [f"g{i:02d}" for i in range(n_genes)]
+    bio = np.random.default_rng(0)
+    targets = [int(t) for t in bio.choice(n_genes, size=n_perts, replace=False)]
+    gene_sets = {}
+    for p in range(n_perts):
+        prog = bio.choice(n_genes, size=program_size, replace=False)
+        _ = bio.choice([-1.0, 1.0], size=program_size) * bio.uniform(0.8, 1.8, size=program_size)
+        gene_sets[f"program_KO_{genes[targets[p]]}"] = [genes[i] for i in prog]
+    return gene_sets
+
+
 def _dense(X):
     return np.asarray(X.todense() if hasattr(X, "todense") else X, dtype=float)
 
@@ -571,19 +590,41 @@ def per_perturbation_energy(report):
 
 
 def summarise(report):
+    """Mean-over-perturbations of the headline metrics across all four families:
+    aggregate (mean shift), DEG recovery, pathway/program recovery, distribution."""
     rows = report["per_perturbation"]
 
     def col(getter):
-        vals = [getter(r) for r in rows]
-        vals = [v for v in vals if v is not None and np.isfinite(v)]
+        vals = []
+        for r in rows:
+            try:
+                v = getter(r)
+            except Exception:
+                v = None
+            if v is not None and np.isfinite(v):
+                vals.append(v)
         return float(np.mean(vals)) if vals else float("nan")
-    return {
+
+    out = {
+        # aggregate (mean-shift fidelity)
         "pcc_delta": col(lambda r: r.aggregate.get("pcc_delta")),
         "mse_delta": col(lambda r: r.aggregate.get("mse_delta")),
+        "r2_delta": col(lambda r: r.aggregate.get("r2_delta")),
+        # DEG recovery (downstream biology)
         "deg_dir_recall@20": col(lambda r: r.deg.get("directional_recall_at_20")),
         "deg_dir_recall@50": col(lambda r: r.deg.get("directional_recall_at_50")),
+        "deg_jaccard@20": col(lambda r: r.deg.get("jaccard_at_20")),
+        "deg_effect_pearson": col(lambda r: r.deg.get("effect_pearson_true_degs")),
+        # distribution (heterogeneity)
         "energy_distance": col(lambda r: r.distribution.get("energy_distance")),
     }
+    # pathway / program recovery (only present when gene_sets were supplied)
+    if rows and rows[0].pathway:
+        out["pathway_jaccard_up"] = col(lambda r: r.pathway.get("jaccard_up"))
+        out["pathway_jaccard_down"] = col(lambda r: r.pathway.get("jaccard_down"))
+        out["pathway_spearman_up"] = col(lambda r: r.pathway.get("spearman_up"))
+        out["pathway_spearman_down"] = col(lambda r: r.pathway.get("spearman_down"))
+    return out
 
 
 def main():
@@ -610,6 +651,9 @@ def main():
     ap.add_argument("--strict-dataset", action="store_true",
                     help="fail (don't fall back to synthetic) if the real load fails")
     ap.add_argument("--out", default=None, help="results json path")
+    ap.add_argument("--gene-sets", default=None,
+                    help="JSON {name: [gene,...]} for pathway metrics (real data). "
+                         "For --dataset synthetic the injected DE programs are used automatically.")
     args = ap.parse_args()
 
     train_ref, truth, source_note = get_data(args)
@@ -626,9 +670,20 @@ def main():
     Z = space.encode(train_counts)
     cond_ids = np.array([conditions.index(c) for c in train_ref.obs["condition"]])
 
+    # gene sets for pathway/program recovery: injected programs (synthetic) or a
+    # user JSON (real data); None -> pathway metrics are skipped.
+    gene_sets = None
+    if args.gene_sets:
+        with open(args.gene_sets) as f:
+            gene_sets = json.load(f)
+    elif source_note.startswith("synthetic"):  # real data can fall back to synthetic
+        gene_sets = perturbseq_gene_sets()
+    if gene_sets:
+        print(f"[pathway] {len(gene_sets)} gene sets -> pathway recovery metrics on")
+
     n_pca = int(min(20, len(genes) - 1, train_ref.n_obs - 1))
     evaluator = BenchmarkEvaluator.from_anndata(train_ref, n_pca_components=n_pca,
-                                                min_matched_samples=2)
+                                                min_matched_samples=2, gene_sets=gene_sets)
 
     results = {}
     for name, obj in [("identity", IdentityBaseline()), ("mean_shift", MeanShiftBaseline())]:

@@ -369,3 +369,45 @@ Files: `scldm_ablation.py`, `scldm_ablation_run.log`,
 The bio-perturbations `utils.bootstrap.bootstrap_metric` helper is also available
 for cell-level (within-run) CIs; here we report the more conservative
 across-seed / across-perturbation CIs.
+
+---
+
+## 10. Biological readout: DEG and pathway/program recovery
+
+Beyond the distribution metric, the harness now reports the full biological
+metric surface from the evaluator (via an enriched `summarise()`), and passes
+**ground-truth gene sets** so pathway recovery is measurable: for synthetic data
+the injected DE programs are used automatically (`perturbseq_gene_sets()`); for
+real data pass `--gene-sets programs.json` (e.g. MSigDB Hallmark or per-perturbation
+DEGs). Enrichr-based enrichment (`gseapy`) needs network access and is skipped
+offline; the program rank-correlation metrics need no external DB.
+
+Synthetic, NB-VAE latent, 3 seeds — does the E-distance gain cost downstream biology?
+
+| model | E-dist ↓ | DEG recall@20 ↑ | DEG Jaccard@20 ↑ | DEG effect-`r` ↑ | pathway `ρ` (down) ↑ |
+| --- | --- | --- | --- | --- | --- |
+| mini-scLDM `K=1`      | 8.41 | 0.513 | 0.417 | 0.991 | 0.29 |
+| mini-scLDM **XM `K=4`** | **8.18** | 0.513 | **0.441** | **0.992** | **0.48** |
+
+**The distribution gain is "free" on the DEG axis and helps pathways.** XM leaves
+DEG directional recall unchanged, slightly improves DEG Jaccard and effect-size
+correlation, and *improves* program recovery (most for down-regulated programs) —
+while lowering E-distance. The only cost is a small rise in MSE-Δ (4.99→5.58).
+This is the paper's central biological claim to confirm on real data.
+
+```bash
+python scldm_bio_eval.py --dataset synthetic --space nbvae --ks 1 4 \
+    --seeds 0 1 2 --updates 3000 --out scldm_bio_results_bioeval.json   # gene sets auto (synthetic)
+```
+
+Files: `scldm_bioeval_run.log`, `scldm_bio_results_bioeval.json`.
+
+---
+
+## 11. Paper draft (AI4DD @ NeurIPS 2026)
+
+`paper/` holds a 5-page LaTeX skeleton (`main.tex`, `references.bib`) targeting
+**AI4DD — AI for Drug Discovery: Bridging the Translation Gap** (deadline
+29 Aug 2026). Content, tables, and the ablation figure are wired to the result
+files above; `\TODO{}` marks each gap (mostly "swap synthetic numbers for
+real-data numbers"). See `paper/README.md` for the build and fill-in checklist.
