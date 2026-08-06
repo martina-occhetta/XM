@@ -536,6 +536,40 @@ def baseline_predictions(model_obj, train_ref, perts):
     return pred
 
 
+def latent_shift_predictions(space, train_ref, conditions, control_label, genes, n_gen, seed=0):
+    """scGen-style latent vector arithmetic (Lotfollahi et al. 2019).
+
+    Predict a perturbed cell as decode(encode(control_cell) + delta_p), where
+    delta_p is the mean latent shift of perturbation p over controls. A strong,
+    non-generative reference: it captures the mean response and inherits control
+    heterogeneity, but cannot invent NEW modes -- so contrasting it with the
+    flow+XM model isolates what the generative model adds. In a VAE latent this
+    is scGen proper; in `logexpr` space it reduces to a log-space mean shift.
+    """
+    rng = np.random.default_rng(seed)
+    counts = _dense(train_ref.layers.get("counts", train_ref.X))
+    cond = train_ref.obs["condition"].to_numpy()
+    Z = space.encode(counts)
+    ctrl_idx = np.flatnonzero(cond == control_label)
+    ctrl_mean = Z[ctrl_idx].mean(0)
+
+    def pred_for(c):
+        delta = Z[np.flatnonzero(cond == c)].mean(0) - ctrl_mean
+        sel = rng.choice(ctrl_idx, size=n_gen, replace=True)
+        return space.decode(Z[sel] + delta)
+
+    matrices = {c: pred_for(c) for c in conditions if c != control_label}
+    control = space.decode(Z[rng.choice(ctrl_idx, size=n_gen, replace=True)])
+    return make_prediction_anndata(matrices, genes, control=control)
+
+
+def per_perturbation_energy(report):
+    """{perturbation: E-distance} from an evaluator report (for paired CIs)."""
+    return {r.perturbation: r.distribution.get("energy_distance")
+            for r in report["per_perturbation"]
+            if r.distribution.get("energy_distance") is not None}
+
+
 def summarise(report):
     rows = report["per_perturbation"]
 

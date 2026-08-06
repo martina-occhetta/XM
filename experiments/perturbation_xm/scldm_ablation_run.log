@@ -1,0 +1,49 @@
+[data] synthetic Perturb-seq: 1800 train / 1800 truth, 50 genes, 5 perts
+[space] vae (flow dim 16)
+[baseline identity] E-distance 8.324 [7.538, 9.086]
+[baseline mean_shift] E-distance 9.171 [8.297, 9.999]
+[baseline scGen_latent_shift] E-distance 8.261 [8.187, 8.341]
+  trained+eval seed=0 K=1
+  trained+eval seed=0 K=2
+  trained+eval seed=0 K=4
+  trained+eval seed=0 K=8
+  trained+eval seed=1 K=1
+  trained+eval seed=1 K=2
+  trained+eval seed=1 K=4
+  trained+eval seed=1 K=8
+  trained+eval seed=2 K=1
+  trained+eval seed=2 K=2
+  trained+eval seed=2 K=4
+  trained+eval seed=2 K=8
+  trained+eval seed=3 K=1
+  trained+eval seed=3 K=2
+  trained+eval seed=3 K=4
+  trained+eval seed=3 K=8
+  trained+eval seed=4 K=1
+  trained+eval seed=4 K=2
+  trained+eval seed=4 K=4
+  trained+eval seed=4 K=8
+
+=== E-distance grid (mean [95% CI]); paired improvement vs K=1 ===
+
+-- 2-step generation --
+  K=1: 9.236 [9.137, 9.338]
+  K=2: 8.739 [8.651, 8.825]  | ΔvsK1=+0.497 [+0.421, +0.579] (SIG, 100% pairs improved)
+  K=4: 8.544 [8.433, 8.663]  | ΔvsK1=+0.691 [+0.560, +0.807] (SIG, 96% pairs improved)
+  K=8: 8.327 [8.248, 8.413]  | ΔvsK1=+0.909 [+0.797, +1.032] (SIG, 100% pairs improved)
+
+-- 4-step generation --
+  K=1: 8.545 [8.433, 8.662]
+  K=2: 8.233 [8.150, 8.323]  | ΔvsK1=+0.312 [+0.212, +0.424] (SIG, 84% pairs improved)
+  K=4: 8.154 [8.045, 8.274]  | ΔvsK1=+0.391 [+0.230, +0.542] (SIG, 80% pairs improved)
+  K=8: 8.033 [7.949, 8.115]  | ΔvsK1=+0.512 [+0.399, +0.630] (SIG, 92% pairs improved)
+
+-- 10-step generation --
+  K=1: 8.206 [8.111, 8.304]
+  K=2: 7.993 [7.901, 8.085]  | ΔvsK1=+0.212 [+0.117, +0.318] (SIG, 84% pairs improved)
+  K=4: 7.986 [7.887, 8.091]  | ΔvsK1=+0.220 [+0.090, +0.333] (SIG, 88% pairs improved)
+  K=8: 7.797 [7.720, 7.872]  | ΔvsK1=+0.409 [+0.312, +0.517] (SIG, 100% pairs improved)
+
+wrote /home/user/XM/experiments/perturbation_xm/scldm_ablation_synthetic_vae.json
+wrote /home/user/XM/experiments/perturbation_xm/scldm_ablation_synthetic_vae.png
+DONE exit=0
