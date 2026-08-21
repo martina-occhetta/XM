@@ -59,6 +59,18 @@ from anndata import AnnData
 
 from xm_core import xm_chunked_best_of_k
 from bio_perturbations.evaluator import BenchmarkEvaluator
+
+try:  # reuse the evaluator's exact target parser so our filtering matches it
+    from bio_perturbations.evaluator import _parse_targets
+except Exception:  # pragma: no cover - fallback if the private name changes
+    def _parse_targets(value):
+        if value is None:
+            return ()
+        text = str(value).strip()
+        if not text or text.lower() in {"nan", "none"}:
+            return ()
+        return tuple(v.strip() for v in text.replace(",", "+").split("+") if v.strip())
+
 from bio_perturbations.io import make_prediction_anndata
 from bio_perturbations.baselines import IdentityBaseline, MeanShiftBaseline
 
@@ -203,8 +215,8 @@ def _subset_for_tractability(adata, n_hvg, max_perts, max_cells_per_cond, seed):
         hvg = np.argsort(Y.var(axis=0))[::-1][:n_hvg]
         targets = set()
         for t in adata.obs["target_genes"].astype(str):
-            targets.update(x for x in t.replace("+", " ").split() if x)
-        target_idx = [i for i, g in enumerate(adata.var_names) if g in targets]
+            targets.update(_parse_targets(t))
+        target_idx = [i for i, g in enumerate(map(str, adata.var_names)) if g in targets]
         keep_genes = np.union1d(hvg, np.asarray(target_idx, dtype=int)) if target_idx else hvg
         adata = adata[:, np.sort(keep_genes)].copy()
 
@@ -221,6 +233,76 @@ def _subset_for_tractability(adata, n_hvg, max_perts, max_cells_per_cond, seed):
         adata = adata[keep].copy()
     return adata
 
+def _harmonize_gene_symbols(adata, target_key="target_genes"):
+    """Make the gene axis (var_names) match the identity used by perturbation
+    targets, so the evaluator can resolve them.
+
+    Perturbation targets are gene SYMBOLS (CEBPE, KLF1, ...), but many datasets
+    key var_names by Ensembl ID with symbols in a var column. The evaluator (and
+    our filtering) matches targets against var_names, so if var_names are IDs
+    every target looks "absent". Pick whichever identity (current var_names or a
+    symbol column) overlaps the targets best and use it as var_names.
+    """
+    if target_key not in adata.obs:
+        return adata
+    targets = set()
+    for t in adata.obs[target_key].astype(str):
+        targets.update(_parse_targets(t))
+    if not targets:
+        return adata
+
+    def overlap(names):
+        s = set(map(str, names))
+        return sum(1 for g in targets if g in s)
+
+    best_names, best = list(map(str, adata.var_names)), None
+    best = overlap(best_names)
+    chosen_col = None
+    for col in ("gene_symbol", "gene_symbols", "symbol", "gene_name", "feature_name"):
+        if col in adata.var:
+            cand = list(map(str, adata.var[col].to_numpy()))
+            if overlap(cand) > best:
+                best_names, best, chosen_col = cand, overlap(cand), col
+    if chosen_col is not None:
+        adata.var["gene_id_original"] = list(map(str, adata.var_names)) 
+        adata.var_names = best_names
+        adata.var_names_make_unique()
+        print(f"[prep] switched gene axis to symbols from var['{chosen_col}'] "
+              f"({best}/{len(targets)} targets now resolve)")
+    return adata
+
+
+def _drop_unevaluable_perts(adata, target_key="target_genes"):
+    """Drop perturbations whose on-target gene is not in the measured gene panel.
+
+    The evaluator requires each perturbation's target to be present (it excludes
+    the on-target gene from downstream metrics) and errors otherwise. Some
+    targets -- e.g. CRISPRa-activated genes in Norman -- simply aren't in the
+    expression matrix, so they cannot be evaluated and are removed here (from
+    both train and truth, before the split, so the two stay consistent).
+    """
+    if target_key not in adata.obs:
+        return adata
+    genes = set(map(str, adata.var_names))
+    cond = adata.obs["condition"].astype(str).to_numpy()
+    tgt = adata.obs[target_key].astype(str).to_numpy()
+    drop = np.zeros(adata.n_obs, dtype=bool)
+    dropped = []
+    for c in pd.unique(cond):
+        if c == "control":
+            continue
+        rows = np.flatnonzero(cond == c)
+        targets = _parse_targets(tgt[rows[0]])
+        missing = [g for g in targets if g not in genes]
+        if not targets or missing:
+            drop[rows] = True
+            dropped.append((c, missing or ["<no-target-annotation>"]))
+    if dropped:
+        shown = ", ".join(f"{c}({'/'.join(m)})" for c, m in dropped[:10])
+        print(f"[prep] dropping {len(dropped)} perturbation(s) with unmeasured/missing "
+              f"on-target gene: {shown}{'...' if len(dropped) > 10 else ''}")
+    return adata[~drop].copy()
+    
 
 def load_real_dataset(name, *, n_hvg, max_perts, max_cells_per_cond,
                       n_pseudoreplicates, test_fraction, cache_dir, seed):
@@ -234,8 +316,12 @@ def load_real_dataset(name, *, n_hvg, max_perts, max_cells_per_cond,
     # ensure a raw-count layer for DESeq2 (loader sets it, but be defensive)
     if "counts" not in adata.layers:
         adata.layers["counts"] = _dense(adata.X)
+    adata = _harmonize_gene_symbols(adata)
     adata = _subset_for_tractability(adata, n_hvg, max_perts, max_cells_per_cond, seed)
     adata.var["include_for_evaluation"] = True
+    # Remove perturbations whose on-target gene isn't in the panel (the evaluator
+    # requires it); do this before the split so train/truth stay consistent.
+    adata = _drop_unevaluable_perts(adata)
     train, truth = cell_level_holdout(adata, test_fraction=test_fraction, seed=seed)
     _assign_pseudoreplicates(train, n_pseudoreplicates, seed=seed)
     _assign_pseudoreplicates(truth, n_pseudoreplicates, seed=seed + 1)
