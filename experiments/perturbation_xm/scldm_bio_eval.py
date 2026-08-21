@@ -692,7 +692,14 @@ def main():
         rep = evaluator.evaluate_anndata(baseline_predictions(obj, train_ref, perts), truth)
         results[name] = summarise(rep)
         print(f"[baseline {name}] " + " ".join(f"{k}={v:.4f}" for k, v in results[name].items()))
-
+      
+    # scGen-style latent vector arithmetic, in the SAME representation space as the
+    # flow -- a strong reference; contrast it with flow/XM on DEG recovery, not just E-distance.
+    scgen_pred = latent_shift_predictions(space, train_ref, conditions, "control", genes, args.n_gen)
+    results["scGen_latent_shift"] = summarise(evaluator.evaluate_anndata(scgen_pred, truth))
+    print("[baseline scGen_latent_shift] "
+          + " ".join(f"{k}={v:.4f}" for k, v in results["scGen_latent_shift"].items()))
+  
     for k in args.ks:
         per_seed = []
         for s in args.seeds:
