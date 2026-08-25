@@ -31,11 +31,12 @@ SPACE="${SPACE:-nbvae}"          # count decoder for real counts
 GENE_SETS="${GENE_SETS:-}"       # optional path to {name:[genes]} JSON for pathway metrics
 GS_ARG=""; [ -n "$GENE_SETS" ] && GS_ARG="--gene-sets $GENE_SETS"
 
+DSUF=""; [ "$XM_DIRECTION" != "forward" ] && DSUF="_${XM_DIRECTION}"
 python "$EXP_DIR/scldm_bio_eval.py" \
     --dataset "$DATASET" --space "$SPACE" \
     --n-hvg 2000 --max-perts 20 --max-cells-per-cond 400 \
     --seeds 0 1 2 --ks 1 4 --updates 5000 \
     --cache-dir "$DATA_DIR" --strict-dataset $GS_ARG \
-    --out "results/bioeval_${DATASET}_${SPACE}.json"
+    --out "results/bioeval_${DATASET}_${SPACE}${DSUF}.json"
 
 echo "[done] results/bioeval_${DATASET}_${SPACE}.json"
