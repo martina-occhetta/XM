@@ -775,6 +775,8 @@ def main():
     ap.add_argument("--strict-dataset", action="store_true",
                     help="fail (don't fall back to synthetic) if the real load fails")
     ap.add_argument("--out", default=None, help="results json path")
+    ap.add_argument("--xm-direction", default="forward", choices=["forward", "reverse"],
+                    help="forward = explore noises (default); reverse = explore data targets")
     ap.add_argument("--gene-sets", default=None,
                     help="JSON {name: [gene,...]} for pathway metrics (real data). "
                          "For --dataset synthetic the injected DE programs are used automatically.")
@@ -825,7 +827,8 @@ def main():
     for k in args.ks:
         per_seed = []
         for s in args.seeds:
-            model = fit_flow(Z, cond_ids, len(conditions), best_of_k=k, seed=s, updates=args.updates)
+            model = fit_flow(Z, cond_ids, len(conditions), best_of_k=k, seed=s,
+                             updates=args.updates, direction=args.xm_direction)
             pred = flow_predictions(model, space, conditions, "control", genes,
                                     n_gen=args.n_gen, n_steps=args.n_steps)
             per_seed.append(summarise(evaluator.evaluate_anndata(pred, truth)))
@@ -839,7 +842,8 @@ def main():
 
     out = {"config": vars(args), "source": source_note, "space": space.name,
            "flow_dim": int(space.dim), "conditions": conditions, "results": results}
-    out_path = args.out or os.path.join(HERE, f"scldm_bio_results_{args.dataset}_{space.name}.json")
+    dsuf = "" if args.xm_direction == "forward" else f"_{args.xm_direction}"
+    out_path = args.out or os.path.join(HERE, f"scldm_bio_results_{args.dataset}_{space.name}{dsuf}.json")
     with open(out_path, "w") as f:
         json.dump(out, f, indent=2)
     print("wrote", out_path)
