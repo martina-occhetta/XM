@@ -272,6 +272,40 @@ def _harmonize_gene_symbols(adata, target_key="target_genes"):
     return adata
 
 
+def _clean_target_annotations(adata, target_key="target_genes"):
+    """Strip guide/plasmid suffixes from target annotations so they match gene
+    symbols. Adamson labels perturbations at the guide level (e.g. 'OST4_pDS353'),
+    so the target reads 'OST4_pDS353' and never resolves; we peel trailing
+    '_<segment>' parts until the prefix is a measured gene ('OST4'). No-op when
+    targets are already clean symbols (Norman/Replogle)."""
+    if target_key not in adata.obs:
+        return adata
+    genes = set(map(str, adata.var_names))
+
+    def clean(tok):
+        if tok in genes:
+            return tok
+        parts = tok.split("_")
+        for i in range(len(parts) - 1, 0, -1):
+            cand = "_".join(parts[:i])
+            if cand in genes:
+                return cand
+        return tok  # leave unchanged; _drop_unevaluable_perts handles it
+
+    new, changed = [], 0
+    for val in adata.obs[target_key].astype(str):
+        toks = _parse_targets(val)
+        cleaned = [clean(t) for t in toks]
+        if list(toks) != cleaned:
+            changed += 1
+        new.append("+".join(cleaned))
+    adata.obs[target_key] = new
+    if changed:
+        print(f"[prep] cleaned {changed} guide-suffixed target annotations "
+              f"(e.g. GENE_pDS### -> GENE)")
+    return adata
+
+
 def _drop_unevaluable_perts(adata, target_key="target_genes"):
     """Drop perturbations whose on-target gene is not in the measured gene panel.
 
@@ -317,6 +351,8 @@ def load_real_dataset(name, *, n_hvg, max_perts, max_cells_per_cond,
     if "counts" not in adata.layers:
         adata.layers["counts"] = _dense(adata.X)
     adata = _harmonize_gene_symbols(adata)
+    # strip guide/plasmid suffixes from targets (e.g. Adamson 'GENE_pDS###' -> 'GENE')
+    adata = _clean_target_annotations(adata)
     adata = _subset_for_tractability(adata, n_hvg, max_perts, max_cells_per_cond, seed)
     adata.var["include_for_evaluation"] = True
     # Remove perturbations whose on-target gene isn't in the panel (the evaluator
