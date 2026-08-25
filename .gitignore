@@ -163,3 +163,8 @@ inference/vid/common_metrics_on_video_quality/lpips/weights/**
 
 data/robomimic/
 *.pdf
+
+
+data/
+figures/
+results/
