@@ -36,5 +36,6 @@ python "$EXP_DIR/scldm_ablation.py" \
     --cache-dir "$DATA_DIR" --strict-dataset --plot \
     --out-dir results
 
-cp -f "results/scldm_ablation_${DATASET}_${SPACE}.png" "figures/" 2>/dev/null || true
-echo "[done] results/scldm_ablation_${DATASET}_${SPACE}.{json,png}"
+DSUF=""; [ "$XM_DIRECTION" != "forward" ] && DSUF="_${XM_DIRECTION}"
+cp -f "results/scldm_ablation_${DATASET}_${SPACE}${DSUF}.png" "figures/" 2>/dev/null || true
+echo "[done] results/scldm_ablation_${DATASET}_${SPACE}${DSUF}.{json,png}"

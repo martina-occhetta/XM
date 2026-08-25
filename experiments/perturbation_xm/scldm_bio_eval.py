@@ -587,17 +587,53 @@ def loss_calc_wrapper(model_forward, conditions, gt_samples, learning=True,
         return per_sample, None
 
 
-def fit_flow(Z, cond_ids, n_conditions, best_of_k, seed, updates=3000, batch=256, lr=2e-3):
+def fit_flow(Z, cond_ids, n_conditions, best_of_k, seed, updates=3000, batch=256,
+             lr=2e-3, direction="forward"):
+    """Train the conditional flow. direction:
+    - "forward" (default): Forward XM -- fix the data target, explore K source
+      noises, train on the best (the repo's xm_chunked_best_of_k engine). The
+      selected-noise marginal becomes non-Gaussian, which can bias calibration.
+    - "reverse": Reverse XM -- fix the source noise, explore K *data targets*
+      (of the same perturbation), train on the best. The source stays Gaussian,
+      so it does not reweight the noise marginal (Sec 3.2 of the paper); a
+      candidate for reducing Forward-XM's calibration cost.
+    """
     torch.manual_seed(seed)
     model = CondVelocity(dim=Z.shape[1], n_conditions=n_conditions).to(DEVICE)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
-    Z = torch.tensor(Z, dtype=torch.float32, device=DEVICE)
+    Zt = torch.tensor(Z, dtype=torch.float32, device=DEVICE)
     C = torch.tensor(cond_ids, dtype=torch.long, device=DEVICE)
-    N = Z.shape[0]
+    N, D = Zt.shape
     model.train()
+               
+    if direction == "reverse" and best_of_k > 1:
+        rng = np.random.default_rng(seed)
+        # per-perturbation index pools: candidates for a slot share its condition
+        pools = {int(c): np.flatnonzero(np.asarray(cond_ids) == c) for c in np.unique(cond_ids)}
+        for _ in range(updates):
+            slot = torch.randint(0, N, (batch,), device=DEVICE)
+            slot_cond = C[slot]                                   # (B,)
+            z0 = torch.randn(batch, D, device=DEVICE)             # fixed anchor noise per slot
+            t = torch.rand(batch, 1, device=DEVICE)               # fixed timestep per slot
+            sc = slot_cond.cpu().numpy()
+            cand_idx = np.stack([rng.choice(pools[int(c)], size=best_of_k, replace=True) for c in sc])
+            cand = Zt[torch.tensor(cand_idx, device=DEVICE)]      # (B, K, D) explored data targets
+            z0e, te = z0.unsqueeze(1), t.unsqueeze(1)             # (B,1,D), (B,1,1)
+            x_t = (1.0 - te) * z0e + te * cand                    # (B,K,D)
+            u_t = cand - z0e                                      # (B,K,D)
+            t_rep = t.squeeze(-1).unsqueeze(1).expand(batch, best_of_k).reshape(-1)
+            cond_rep = slot_cond.unsqueeze(1).expand(batch, best_of_k).reshape(-1)
+            v = model(x_t.reshape(-1, D), t_rep, cond_rep)        # (B*K, D)
+            per = (v - u_t.reshape(-1, D)).pow(2).mean(dim=1).reshape(batch, best_of_k)
+            loss = per.min(dim=1).values.mean()                   # best data target per noise
+            opt.zero_grad(); loss.backward(); opt.step()
+        model.eval()
+        return model
+
+
     for _ in range(updates):
         idx = torch.randint(0, N, (batch,), device=DEVICE)
-        x1, cond = Z[idx], C[idx]
+        x1, cond = Zt[idx], C[idx]
         t = torch.rand(batch, 1, device=DEVICE)
         opt.zero_grad()
         losses, _ = xm_chunked_best_of_k(
@@ -739,6 +775,8 @@ def main():
     ap.add_argument("--strict-dataset", action="store_true",
                     help="fail (don't fall back to synthetic) if the real load fails")
     ap.add_argument("--out", default=None, help="results json path")
+    ap.add_argument("--xm-direction", default="forward", choices=["forward", "reverse"],
+                    help="forward = explore noises (default); reverse = explore data targets")
     ap.add_argument("--gene-sets", default=None,
                     help="JSON {name: [gene,...]} for pathway metrics (real data). "
                          "For --dataset synthetic the injected DE programs are used automatically.")
@@ -789,7 +827,8 @@ def main():
     for k in args.ks:
         per_seed = []
         for s in args.seeds:
-            model = fit_flow(Z, cond_ids, len(conditions), best_of_k=k, seed=s, updates=args.updates)
+            model = fit_flow(Z, cond_ids, len(conditions), best_of_k=k, seed=s,
+                             updates=args.updates, direction=args.xm_direction)
             pred = flow_predictions(model, space, conditions, "control", genes,
                                     n_gen=args.n_gen, n_steps=args.n_steps)
             per_seed.append(summarise(evaluator.evaluate_anndata(pred, truth)))
@@ -803,7 +842,8 @@ def main():
 
     out = {"config": vars(args), "source": source_note, "space": space.name,
            "flow_dim": int(space.dim), "conditions": conditions, "results": results}
-    out_path = args.out or os.path.join(HERE, f"scldm_bio_results_{args.dataset}_{space.name}.json")
+    dsuf = "" if args.xm_direction == "forward" else f"_{args.xm_direction}"
+    out_path = args.out or os.path.join(HERE, f"scldm_bio_results_{args.dataset}_{space.name}{dsuf}.json")
     with open(out_path, "w") as f:
         json.dump(out, f, indent=2)
     print("wrote", out_path)
