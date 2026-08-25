@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH -J pertxm_download
-#SBATCH -A pilot_andrena
-#SBATCH -p andrena
-#SBATCH -n 4
-#SBATCH -t 8:0:0
+#SBATCH -A pilot
+#SBATCH -p compute
+#SBATCH -n 2
+#SBATCH -t 1:0:0
 #SBATCH --mem-per-cpu=12G
 #SBATCH -o logs/01_download.o%j
 # Apocrita (Slurm). Downloads + caches the real Perturb-seq datasets ONCE into
@@ -22,7 +22,7 @@ export NUMBA_CACHE_DIR="${TMPDIR:-/tmp}/numba_cache"; mkdir -p "$NUMBA_CACHE_DIR
 # pertpy/scanpy also honor these for cache location:
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$DATA_DIR/.cache}"
 
-DATASETS="${DATASETS:-replogle_2022_k562 norman_2019}"
+DATASETS="${DATASETS:-adamson_2016 norman_2019}"
 
-python "$(dirname "$0")/download_datasets.py" --datasets $DATASETS --cache-dir "$DATA_DIR"
+python "/data/SBCS-BessantLab/martina/pert_xm/XM/experiments/perturbation_xm/jobs/download_datasets.py" --datasets $DATASETS --cache-dir "$DATA_DIR"
 echo "[data cached in] $DATA_DIR"
