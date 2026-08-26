@@ -468,7 +468,7 @@ class VAESpace:
         torch.manual_seed(self.seed)
         Y = np.log1p(np.asarray(train_counts, dtype=float))
         self.mu, self.sd = Y.mean(0), Y.std(0) + 1e-6
-        Ystd = torch.tensor((Y - self.mu) / self.sd, dtype=torch.float32, device=DEVICE)
+        Ystd = torch.tensor((Y - self.mu) / self.sd, dtype=torch.float32, device=DEVICE).clamp(-10, 10)
         n_genes = Ystd.shape[1]
         self.vae = VAE(n_genes, self.latent_dim).to(DEVICE)
         opt = torch.optim.Adam(self.vae.parameters(), lr=self.lr)
@@ -479,11 +479,19 @@ class VAESpace:
             perm = torch.randperm(N, device=DEVICE)
             for b in range(steps):
                 xb = Ystd[perm[b * self.batch:(b + 1) * self.batch]]
-                xhat, mu, logvar = self.vae(xb)
+                mu, logvar = self.vae.encode(xb)
+                logvar = logvar.clamp(-10.0, 10.0)
+                z = mu + torch.randn_like(mu) * torch.exp(0.5 * logvar)
+                xhat = self.vae.decode(z)
                 recon = (xhat - xb).pow(2).mean()
                 kl = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp()).mean()
                 loss = recon + self.beta * kl
-                opt.zero_grad(); loss.backward(); opt.step()
+                if not torch.isfinite(loss):
+                    continue
+                opt.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.vae.parameters(), 10.0)
+                opt.step()
         self.vae.eval()
         self.dim = self.latent_dim
         return self
@@ -531,8 +539,8 @@ class NBVAE(nn.Module):
 
 def nb_neg_log_likelihood(x, mu, theta, eps=1e-8):
     """-log NB(x; mean=mu, inverse-dispersion=theta), summed over genes."""
-    theta = theta + eps
-    mu = mu + eps
+    theta = theta.clamp(min=eps, max=1e6) if torch.is_tensor(theta) else theta + eps
+    mu = mu.clamp(min=eps, max=1e8)
     log_theta_mu = torch.log(theta + mu)
     ll = (theta * (torch.log(theta) - log_theta_mu)
           + x * (torch.log(mu) - log_theta_mu)
@@ -564,7 +572,8 @@ class NBVAESpace:
         Y = np.log1p(X)
         self.mu, self.sd = Y.mean(0), Y.std(0) + 1e-6
         self.lib_scale = float(np.median(X.sum(1)))  # library size for generation
-        Xenc = torch.tensor((Y - self.mu) / self.sd, dtype=torch.float32, device=DEVICE)
+        # clamp standardised input so a near-constant gene (tiny sd) can't inject huge z
+        Xenc = torch.tensor((Y - self.mu) / self.sd, dtype=torch.float32, device=DEVICE).clamp(-10, 10)
         Xcount = torch.tensor(X, dtype=torch.float32, device=DEVICE)
         lib = Xcount.sum(dim=1, keepdim=True)  # observed per-cell library
         n_genes = Xenc.shape[1]
@@ -579,13 +588,23 @@ class NBVAESpace:
                 sel = perm[b * self.batch:(b + 1) * self.batch]
                 xe, xc, lb = Xenc[sel], Xcount[sel], lib[sel]
                 mu_z, logvar = self.vae.encode(xe)
+                logvar = logvar.clamp(-10.0, 10.0) # stop exp overflow
                 z = mu_z + torch.randn_like(mu_z) * torch.exp(0.5 * logvar)
+                theta = torch.exp(self.vae.log_theta.clamp(-6.0, 6.0))  # dispersion in [~2e-3, ~400]
                 nb_mean = lb * self.vae.rho(z)
-                recon = nb_neg_log_likelihood(xc, nb_mean, torch.exp(self.vae.log_theta)).mean()
+                recon = nb_neg_log_likelihood(xc, nb_mean, theta).mean()
                 kl = -0.5 * (1 + logvar - mu_z.pow(2) - logvar.exp()).sum(1).mean()
                 loss = recon + self.beta * kl
-                opt.zero_grad(); loss.backward(); opt.step()
+                if not torch.isfinite(loss):
+                    continue  # skip a bad step rather than poisoning the weights
+                opt.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.vae.parameters(), 10.0)
+                opt.step()
         self.vae.eval()
+        if not all(torch.isfinite(p).all() for p in self.vae.parameters()):
+          raise RuntimeError("NB-VAE training diverged (non-finite parameters); "
+                              "lower --vae lr or check for extreme libraries.")
         self.dim = self.latent_dim
         return self
 
