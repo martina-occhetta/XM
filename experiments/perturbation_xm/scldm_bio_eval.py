@@ -660,10 +660,47 @@ def loss_calc_wrapper(model_forward, conditions, gt_samples, learning=True,
         per_sample = (v - u_t).pow(2).reshape(x1.shape[0], -1).mean(dim=1)
         return per_sample, None
 
+# --- latent diffusion generator ------------
+def _abar(t):
+    """Cosine schedule alpha-bar; t in [0,1]: t=0 -> clean data, t=1 -> pure noise."""
+    return torch.cos(0.5 * torch.pi * t).clamp(0.0, 1.0).pow(2)
+
+
+def loss_calc_wrapper_diffusion(model_forward, conditions, gt_samples, learning=True,
+                                rand_inputs=None, rand_seeds=None):
+    """Latent diffusion, x0-prediction (more stable than eps-pred near t=1),
+    XM-compatible (explore over eps=rand_inputs). x_t = sqrt(abar) data +
+    sqrt(1-abar) eps; the net predicts the clean latent data."""
+    t, cond = conditions
+    with torch.set_grad_enabled(learning):
+        eps, data = rand_inputs, gt_samples
+        ab = _abar(t)
+        x_t = ab.sqrt() * data + (1.0 - ab).clamp(min=0).sqrt() * eps
+        x0_pred = model_forward(x_t, t.squeeze(-1), cond)
+        per_sample = (x0_pred - data).pow(2).reshape(data.shape[0], -1).mean(dim=1)
+        return per_sample, None
+
+
+@torch.no_grad()
+def sample_diffusion(model, cond_id, n, dim, n_steps=10):
+    """Deterministic DDIM with an x0-predicting net (t=1 noise -> t=0 data).
+    x0-prediction avoids the 1/sqrt(abar) blow-up of eps-prediction at t~1; the
+    final step (t=0) returns the predicted clean latent directly."""
+    cond = torch.full((n,), cond_id, dtype=torch.long, device=DEVICE)
+    x = torch.randn(n, dim, device=DEVICE)
+    ts = torch.linspace(1.0, 0.0, n_steps + 1, device=DEVICE)
+    for i in range(n_steps):
+        tc, tn = ts[i], ts[i + 1]
+        ab_c, ab_n = _abar(tc), _abar(tn)
+        x0 = model(x, torch.full((n,), float(tc), device=DEVICE), cond)
+        eps_hat = (x - ab_c.sqrt() * x0) / (1.0 - ab_c).clamp(min=1e-4).sqrt()
+        x = ab_n.sqrt() * x0 + (1.0 - ab_n).clamp(min=0).sqrt() * eps_hat
+    return x.cpu().numpy()
+
 
 def fit_flow(Z, cond_ids, n_conditions, best_of_k, seed, updates=3000, batch=256,
-             lr=2e-3, direction="forward"):
-    """Train the conditional flow. direction:
+            lr=2e-3, direction="forward", generator="flow"):
+    """Train the conditional generator (generator="flow" or "diffusion"). direction:
     - "forward" (default): Forward XM -- fix the data target, explore K source
       noises, train on the best (the repo's xm_chunked_best_of_k engine). The
       selected-noise marginal becomes non-Gaussian, which can bias calibration.
@@ -678,6 +715,8 @@ def fit_flow(Z, cond_ids, n_conditions, best_of_k, seed, updates=3000, batch=256
     Zt = torch.tensor(Z, dtype=torch.float32, device=DEVICE)
     C = torch.tensor(cond_ids, dtype=torch.long, device=DEVICE)
     N, D = Zt.shape
+    is_diff = (generator == "diffusion")
+    wrapper = loss_calc_wrapper_diffusion if is_diff else loss_calc_wrapper
     model.train()
                
     if direction == "reverse" and best_of_k > 1:
@@ -687,18 +726,24 @@ def fit_flow(Z, cond_ids, n_conditions, best_of_k, seed, updates=3000, batch=256
         for _ in range(updates):
             slot = torch.randint(0, N, (batch,), device=DEVICE)
             slot_cond = C[slot]                                   # (B,)
-            z0 = torch.randn(batch, D, device=DEVICE)             # fixed anchor noise per slot
+            z0 = torch.randn(batch, D, device=DEVICE)             # fixed anchor noise/eps per slot
             t = torch.rand(batch, 1, device=DEVICE)               # fixed timestep per slot
             sc = slot_cond.cpu().numpy()
             cand_idx = np.stack([rng.choice(pools[int(c)], size=best_of_k, replace=True) for c in sc])
             cand = Zt[torch.tensor(cand_idx, device=DEVICE)]      # (B, K, D) explored data targets
-            z0e, te = z0.unsqueeze(1), t.unsqueeze(1)             # (B,1,D), (B,1,1)
-            x_t = (1.0 - te) * z0e + te * cand                    # (B,K,D)
-            u_t = cand - z0e                                      # (B,K,D)
+            z0e = z0.unsqueeze(1)                                 # (B,1,D)
+            if is_diff:                                           # diffusion: x_t=sqrt(ab)cand+sqrt(1-ab)eps; predict x0=cand       
+                abe = _abar(t).unsqueeze(1)                       # (B,1,1)
+                x_t = abe.sqrt() * cand + (1.0 - abe).clamp(min=0).sqrt() * z0e
+                target = cand
+            else:                                                 # flow: x_t=(1-t)eps+t*cand; predict velocity
+                te = t.unsqueeze(1)
+                x_t = (1.0 - te) * z0e + te * cand
+                target = cand - z0e                                   # (B,K,D)
             t_rep = t.squeeze(-1).unsqueeze(1).expand(batch, best_of_k).reshape(-1)
             cond_rep = slot_cond.unsqueeze(1).expand(batch, best_of_k).reshape(-1)
             v = model(x_t.reshape(-1, D), t_rep, cond_rep)        # (B*K, D)
-            per = (v - u_t.reshape(-1, D)).pow(2).mean(dim=1).reshape(batch, best_of_k)
+            per = (v - target.reshape(-1, D)).pow(2).mean(dim=1).reshape(batch, best_of_k)
             loss = per.min(dim=1).values.mean()                   # best data target per noise
             opt.zero_grad(); loss.backward(); opt.step()
         model.eval()
@@ -711,7 +756,7 @@ def fit_flow(Z, cond_ids, n_conditions, best_of_k, seed, updates=3000, batch=256
         t = torch.rand(batch, 1, device=DEVICE)
         opt.zero_grad()
         losses, _ = xm_chunked_best_of_k(
-            model.forward, loss_calc_wrapper, conditions=(t, cond), gt_samples=x1,
+            model.forward, wrapper, conditions=(t, cond), gt_samples=x1,
             best_of_k=best_of_k, max_chunk_bs_mult=max(best_of_k, 1),
             save_mem_mode=True, not_training=False)
         losses.mean().backward()
@@ -734,11 +779,13 @@ def sample_flow(model, cond_id, n, dim, n_steps=10):
 # ===========================================================================
 # Predict + evaluate
 # ===========================================================================
-def flow_predictions(model, space, conditions, control_label, genes, n_gen, n_steps):
+def flow_predictions(model, space, conditions, control_label, genes, n_gen, n_steps,
+                     generator="flow"):
     cond_to_id = {c: i for i, c in enumerate(conditions)}
+    sampler = sample_diffusion if generator == "diffusion" else sample_flow
 
     def gen(c):
-        Z = sample_flow(model, cond_to_id[c], n_gen, space.dim, n_steps=n_steps)
+        Z = sampler(model, cond_to_id[c], n_gen, space.dim, n_steps=n_steps)
         return space.decode(Z)  # -> non-negative count-scale expression
 
     matrices = {c: gen(c) for c in conditions if c != control_label}
