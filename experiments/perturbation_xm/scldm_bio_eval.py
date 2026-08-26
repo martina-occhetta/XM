@@ -468,7 +468,7 @@ class VAESpace:
         torch.manual_seed(self.seed)
         Y = np.log1p(np.asarray(train_counts, dtype=float))
         self.mu, self.sd = Y.mean(0), Y.std(0) + 1e-6
-        Ystd = torch.tensor((Y - self.mu) / self.sd, dtype=torch.float32, device=DEVICE)
+        Ystd = torch.tensor((Y - self.mu) / self.sd, dtype=torch.float32, device=DEVICE).clamp(-10, 10)
         n_genes = Ystd.shape[1]
         self.vae = VAE(n_genes, self.latent_dim).to(DEVICE)
         opt = torch.optim.Adam(self.vae.parameters(), lr=self.lr)
@@ -479,11 +479,19 @@ class VAESpace:
             perm = torch.randperm(N, device=DEVICE)
             for b in range(steps):
                 xb = Ystd[perm[b * self.batch:(b + 1) * self.batch]]
-                xhat, mu, logvar = self.vae(xb)
+                mu, logvar = self.vae.encode(xb)
+                logvar = logvar.clamp(-10.0, 10.0)
+                z = mu + torch.randn_like(mu) * torch.exp(0.5 * logvar)
+                xhat = self.vae.decode(z)
                 recon = (xhat - xb).pow(2).mean()
                 kl = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp()).mean()
                 loss = recon + self.beta * kl
-                opt.zero_grad(); loss.backward(); opt.step()
+                if not torch.isfinite(loss):
+                    continue
+                opt.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.vae.parameters(), 10.0)
+                opt.step()
         self.vae.eval()
         self.dim = self.latent_dim
         return self
