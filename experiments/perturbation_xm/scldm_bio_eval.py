@@ -391,7 +391,8 @@ def get_data(args):
             args.dataset, n_hvg=args.n_hvg, max_perts=args.max_perts,
             max_cells_per_cond=args.max_cells_per_cond,
             n_pseudoreplicates=args.n_pseudoreplicates,
-            test_fraction=args.test_fraction, cache_dir=args.cache_dir, seed=0)
+            test_fraction=args.test_fraction, cache_dir=args.cache_dir, seed=0,
+            min_cells_per_pert=getattr(args, 'min_cells_per_pert', 0)))
         return train, truth, f"real dataset '{args.dataset}' (bio_perturbations/pertpy)"
     except Exception as e:  # noqa: BLE001 - want any failure (network/import/etc)
         msg = f"{type(e).__name__}: {e}"
@@ -825,6 +826,7 @@ def main():
     ap.add_argument("--max-cells-per-cond", type=int, default=400)
     ap.add_argument("--n-pseudoreplicates", type=int, default=2)
     ap.add_argument("--test-fraction", type=float, default=0.3)
+    ap.add_argument("--min-cells-per-pert", type=int, default=0)
     ap.add_argument("--cache-dir", default=None)
     ap.add_argument("--strict-dataset", action="store_true",
                     help="fail (don't fall back to synthetic) if the real load fails")
