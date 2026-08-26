@@ -337,9 +337,26 @@ def _drop_unevaluable_perts(adata, target_key="target_genes"):
               f"on-target gene: {shown}{'...' if len(dropped) > 10 else ''}")
     return adata[~drop].copy()
     
+def _filter_min_cells_per_pert(adata, min_cells):
+    """Drop perturbations with fewer than `min_cells` cells (control always kept).
+    Small perturbations give noisy pseudobulk DEGs; important when using ALL
+    perturbations (--max-perts 0)."""
+    if not min_cells or min_cells <= 0:
+        return adata
+    cond = adata.obs["condition"].astype(str)
+    counts = cond.value_counts()
+    keep = set(counts[counts >= min_cells].index) | {"control"}
+    n_before = cond.nunique() - 1
+    adata = adata[cond.isin(keep).to_numpy()].copy()
+    n_after = adata.obs["condition"].astype(str).nunique() - 1
+    if n_after < n_before:
+        print(f"[prep] min-cells filter (>={min_cells}): kept {n_after}/{n_before} perturbations")
+    return adata
+
 
 def load_real_dataset(name, *, n_hvg, max_perts, max_cells_per_cond,
-                      n_pseudoreplicates, test_fraction, cache_dir, seed):
+                      n_pseudoreplicates, test_fraction, cache_dir, seed,
+                      min_cells_per_pert=0):
     """Load a real pertpy dataset via bio_perturbations and prepare 4-state eval.
 
     Returns (train_reference, truth), both contract-ready with pseudo-replicate
@@ -358,6 +375,7 @@ def load_real_dataset(name, *, n_hvg, max_perts, max_cells_per_cond,
     # Remove perturbations whose on-target gene isn't in the panel (the evaluator
     # requires it); do this before the split so train/truth stay consistent.
     adata = _drop_unevaluable_perts(adata)
+    adata = _filter_min_cells_per_pert(adata, min_cells_per_pert)
     train, truth = cell_level_holdout(adata, test_fraction=test_fraction, seed=seed)
     _assign_pseudoreplicates(train, n_pseudoreplicates, seed=seed)
     _assign_pseudoreplicates(truth, n_pseudoreplicates, seed=seed + 1)
