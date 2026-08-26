@@ -826,7 +826,8 @@ def main():
     ap.add_argument("--max-cells-per-cond", type=int, default=400)
     ap.add_argument("--n-pseudoreplicates", type=int, default=2)
     ap.add_argument("--test-fraction", type=float, default=0.3)
-    ap.add_argument("--min-cells-per-pert", type=int, default=0)
+    ap.add_argument("--min-cells-per-pert", type=int, default=0,
+                    help="drop perturbations with fewer than this many cells (0=off; use ~50 with --max-perts 0)")
     ap.add_argument("--cache-dir", default=None)
     ap.add_argument("--strict-dataset", action="store_true",
                     help="fail (don't fall back to synthetic) if the real load fails")
