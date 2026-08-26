@@ -392,7 +392,7 @@ def get_data(args):
             max_cells_per_cond=args.max_cells_per_cond,
             n_pseudoreplicates=args.n_pseudoreplicates,
             test_fraction=args.test_fraction, cache_dir=args.cache_dir, seed=0,
-            min_cells_per_pert=getattr(args, 'min_cells_per_pert', 0)))
+            min_cells_per_pert=getattr(args, 'min_cells_per_pert', 0))
         return train, truth, f"real dataset '{args.dataset}' (bio_perturbations/pertpy)"
     except Exception as e:  # noqa: BLE001 - want any failure (network/import/etc)
         msg = f"{type(e).__name__}: {e}"
