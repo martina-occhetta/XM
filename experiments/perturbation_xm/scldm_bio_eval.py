@@ -59,7 +59,6 @@ from anndata import AnnData
 
 from xm_core import xm_chunked_best_of_k
 from bio_perturbations.evaluator import BenchmarkEvaluator
-
 try:  # reuse the evaluator's exact target parser so our filtering matches it
     from bio_perturbations.evaluator import _parse_targets
 except Exception:  # pragma: no cover - fallback if the private name changes
@@ -70,7 +69,6 @@ except Exception:  # pragma: no cover - fallback if the private name changes
         if not text or text.lower() in {"nan", "none"}:
             return ()
         return tuple(v.strip() for v in text.replace(",", "+").split("+") if v.strip())
-
 from bio_perturbations.io import make_prediction_anndata
 from bio_perturbations.baselines import IdentityBaseline, MeanShiftBaseline
 
@@ -233,6 +231,7 @@ def _subset_for_tractability(adata, n_hvg, max_perts, max_cells_per_cond, seed):
         adata = adata[keep].copy()
     return adata
 
+
 def _harmonize_gene_symbols(adata, target_key="target_genes"):
     """Make the gene axis (var_names) match the identity used by perturbation
     targets, so the evaluator can resolve them.
@@ -264,7 +263,7 @@ def _harmonize_gene_symbols(adata, target_key="target_genes"):
             if overlap(cand) > best:
                 best_names, best, chosen_col = cand, overlap(cand), col
     if chosen_col is not None:
-        adata.var["gene_id_original"] = list(map(str, adata.var_names)) 
+        adata.var["gene_id_original"] = list(map(str, adata.var_names))  # modify in place (avoid a full copy)
         adata.var_names = best_names
         adata.var_names_make_unique()
         print(f"[prep] switched gene axis to symbols from var['{chosen_col}'] "
@@ -336,7 +335,8 @@ def _drop_unevaluable_perts(adata, target_key="target_genes"):
         print(f"[prep] dropping {len(dropped)} perturbation(s) with unmeasured/missing "
               f"on-target gene: {shown}{'...' if len(dropped) > 10 else ''}")
     return adata[~drop].copy()
-    
+
+
 def _filter_min_cells_per_pert(adata, min_cells):
     """Drop perturbations with fewer than `min_cells` cells (control always kept).
     Small perturbations give noisy pseudobulk DEGs; important when using ALL
@@ -367,6 +367,7 @@ def load_real_dataset(name, *, n_hvg, max_perts, max_cells_per_cond,
     # ensure a raw-count layer for DESeq2 (loader sets it, but be defensive)
     if "counts" not in adata.layers:
         adata.layers["counts"] = _dense(adata.X)
+    # make var_names gene symbols (targets are symbols; var_names may be Ensembl)
     adata = _harmonize_gene_symbols(adata)
     # strip guide/plasmid suffixes from targets (e.g. Adamson 'GENE_pDS###' -> 'GENE')
     adata = _clean_target_annotations(adata)
@@ -488,8 +489,7 @@ class VAESpace:
                 loss = recon + self.beta * kl
                 if not torch.isfinite(loss):
                     continue
-                opt.zero_grad()
-                loss.backward()
+                opt.zero_grad(); loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.vae.parameters(), 10.0)
                 opt.step()
         self.vae.eval()
@@ -588,7 +588,7 @@ class NBVAESpace:
                 sel = perm[b * self.batch:(b + 1) * self.batch]
                 xe, xc, lb = Xenc[sel], Xcount[sel], lib[sel]
                 mu_z, logvar = self.vae.encode(xe)
-                logvar = logvar.clamp(-10.0, 10.0) # stop exp overflow
+                logvar = logvar.clamp(-10.0, 10.0)                      # stop exp overflow
                 z = mu_z + torch.randn_like(mu_z) * torch.exp(0.5 * logvar)
                 theta = torch.exp(self.vae.log_theta.clamp(-6.0, 6.0))  # dispersion in [~2e-3, ~400]
                 nb_mean = lb * self.vae.rho(z)
@@ -597,14 +597,13 @@ class NBVAESpace:
                 loss = recon + self.beta * kl
                 if not torch.isfinite(loss):
                     continue  # skip a bad step rather than poisoning the weights
-                opt.zero_grad()
-                loss.backward()
+                opt.zero_grad(); loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.vae.parameters(), 10.0)
                 opt.step()
         self.vae.eval()
         if not all(torch.isfinite(p).all() for p in self.vae.parameters()):
-          raise RuntimeError("NB-VAE training diverged (non-finite parameters); "
-                              "lower --vae lr or check for extreme libraries.")
+            raise RuntimeError("NB-VAE training diverged (non-finite parameters); "
+                               "lower --vae lr or check for extreme libraries.")
         self.dim = self.latent_dim
         return self
 
@@ -660,7 +659,8 @@ def loss_calc_wrapper(model_forward, conditions, gt_samples, learning=True,
         per_sample = (v - u_t).pow(2).reshape(x1.shape[0], -1).mean(dim=1)
         return per_sample, None
 
-# --- latent diffusion generator ------------
+
+# --- latent diffusion generator (scLDM is a latent DIFFUSION model) ------------
 def _abar(t):
     """Cosine schedule alpha-bar; t in [0,1]: t=0 -> clean data, t=1 -> pure noise."""
     return torch.cos(0.5 * torch.pi * t).clamp(0.0, 1.0).pow(2)
@@ -699,7 +699,7 @@ def sample_diffusion(model, cond_id, n, dim, n_steps=10):
 
 
 def fit_flow(Z, cond_ids, n_conditions, best_of_k, seed, updates=3000, batch=256,
-            lr=2e-3, direction="forward", generator="flow"):
+             lr=2e-3, direction="forward", generator="flow"):
     """Train the conditional generator (generator="flow" or "diffusion"). direction:
     - "forward" (default): Forward XM -- fix the data target, explore K source
       noises, train on the best (the repo's xm_chunked_best_of_k engine). The
@@ -718,7 +718,7 @@ def fit_flow(Z, cond_ids, n_conditions, best_of_k, seed, updates=3000, batch=256
     is_diff = (generator == "diffusion")
     wrapper = loss_calc_wrapper_diffusion if is_diff else loss_calc_wrapper
     model.train()
-               
+
     if direction == "reverse" and best_of_k > 1:
         rng = np.random.default_rng(seed)
         # per-perturbation index pools: candidates for a slot share its condition
@@ -732,14 +732,14 @@ def fit_flow(Z, cond_ids, n_conditions, best_of_k, seed, updates=3000, batch=256
             cand_idx = np.stack([rng.choice(pools[int(c)], size=best_of_k, replace=True) for c in sc])
             cand = Zt[torch.tensor(cand_idx, device=DEVICE)]      # (B, K, D) explored data targets
             z0e = z0.unsqueeze(1)                                 # (B,1,D)
-            if is_diff:                                           # diffusion: x_t=sqrt(ab)cand+sqrt(1-ab)eps; predict x0=cand       
+            if is_diff:                                           # diffusion: x_t=sqrt(ab)cand+sqrt(1-ab)eps; predict x0=cand
                 abe = _abar(t).unsqueeze(1)                       # (B,1,1)
                 x_t = abe.sqrt() * cand + (1.0 - abe).clamp(min=0).sqrt() * z0e
                 target = cand
             else:                                                 # flow: x_t=(1-t)eps+t*cand; predict velocity
                 te = t.unsqueeze(1)
                 x_t = (1.0 - te) * z0e + te * cand
-                target = cand - z0e                                   # (B,K,D)
+                target = cand - z0e
             t_rep = t.squeeze(-1).unsqueeze(1).expand(batch, best_of_k).reshape(-1)
             cond_rep = slot_cond.unsqueeze(1).expand(batch, best_of_k).reshape(-1)
             v = model(x_t.reshape(-1, D), t_rep, cond_rep)        # (B*K, D)
@@ -749,7 +749,7 @@ def fit_flow(Z, cond_ids, n_conditions, best_of_k, seed, updates=3000, batch=256
         model.eval()
         return model
 
-
+    # forward XM (and K=1 baseline)
     for _ in range(updates):
         idx = torch.randint(0, N, (batch,), device=DEVICE)
         x1, cond = Zt[idx], C[idx]
@@ -890,16 +890,18 @@ def main():
     ap.add_argument("--n-hvg", type=int, default=2000)
     ap.add_argument("--max-perts", type=int, default=20)
     ap.add_argument("--max-cells-per-cond", type=int, default=400)
-    ap.add_argument("--n-pseudoreplicates", type=int, default=2)
-    ap.add_argument("--test-fraction", type=float, default=0.3)
     ap.add_argument("--min-cells-per-pert", type=int, default=0,
                     help="drop perturbations with fewer than this many cells (0=off; use ~50 with --max-perts 0)")
+    ap.add_argument("--n-pseudoreplicates", type=int, default=2)
+    ap.add_argument("--test-fraction", type=float, default=0.3)
     ap.add_argument("--cache-dir", default=None)
     ap.add_argument("--strict-dataset", action="store_true",
                     help="fail (don't fall back to synthetic) if the real load fails")
     ap.add_argument("--out", default=None, help="results json path")
     ap.add_argument("--xm-direction", default="forward", choices=["forward", "reverse"],
                     help="forward = explore noises (default); reverse = explore data targets")
+    ap.add_argument("--generator", default="flow", choices=["flow", "diffusion"],
+                    help="flow = flow-matching (default); diffusion = latent DDPM (scLDM formulation)")
     ap.add_argument("--gene-sets", default=None,
                     help="JSON {name: [gene,...]} for pathway metrics (real data). "
                          "For --dataset synthetic the injected DE programs are used automatically.")
@@ -939,21 +941,23 @@ def main():
         rep = evaluator.evaluate_anndata(baseline_predictions(obj, train_ref, perts), truth)
         results[name] = summarise(rep)
         print(f"[baseline {name}] " + " ".join(f"{k}={v:.4f}" for k, v in results[name].items()))
-      
+
     # scGen-style latent vector arithmetic, in the SAME representation space as the
     # flow -- a strong reference; contrast it with flow/XM on DEG recovery, not just E-distance.
     scgen_pred = latent_shift_predictions(space, train_ref, conditions, "control", genes, args.n_gen)
     results["scGen_latent_shift"] = summarise(evaluator.evaluate_anndata(scgen_pred, truth))
     print("[baseline scGen_latent_shift] "
           + " ".join(f"{k}={v:.4f}" for k, v in results["scGen_latent_shift"].items()))
-  
+
     for k in args.ks:
         per_seed = []
         for s in args.seeds:
             model = fit_flow(Z, cond_ids, len(conditions), best_of_k=k, seed=s,
-                             updates=args.updates, direction=args.xm_direction)
+                             updates=args.updates, direction=args.xm_direction,
+                             generator=args.generator)
             pred = flow_predictions(model, space, conditions, "control", genes,
-                                    n_gen=args.n_gen, n_steps=args.n_steps)
+                                    n_gen=args.n_gen, n_steps=args.n_steps,
+                                    generator=args.generator)
             per_seed.append(summarise(evaluator.evaluate_anndata(pred, truth)))
             tag = "baseline flow (K=1)" if k == 1 else f"XM flow (K={k})"
             print(f"[{tag} seed={s}] " + " ".join(f"{kk}={vv:.4f}" for kk, vv in per_seed[-1].items()))
@@ -966,7 +970,8 @@ def main():
     out = {"config": vars(args), "source": source_note, "space": space.name,
            "flow_dim": int(space.dim), "conditions": conditions, "results": results}
     dsuf = "" if args.xm_direction == "forward" else f"_{args.xm_direction}"
-    out_path = args.out or os.path.join(HERE, f"scldm_bio_results_{args.dataset}_{space.name}{dsuf}.json")
+    gsuf = "" if args.generator == "flow" else f"_{args.generator}"
+    out_path = args.out or os.path.join(HERE, f"scldm_bio_results_{args.dataset}_{space.name}{gsuf}{dsuf}.json")
     with open(out_path, "w") as f:
         json.dump(out, f, indent=2)
     print("wrote", out_path)
