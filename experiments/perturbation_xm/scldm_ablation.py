@@ -76,6 +76,7 @@ def main():
     ap.add_argument("--n-hvg", type=int, default=2000)
     ap.add_argument("--max-perts", type=int, default=20)
     ap.add_argument("--max-cells-per-cond", type=int, default=400)
+    ap.add_argument("--min-cells-per-pert", type=int, default=0)
     ap.add_argument("--n-pseudoreplicates", type=int, default=2)
     ap.add_argument("--test-fraction", type=float, default=0.3)
     ap.add_argument("--cache-dir", default=None)
